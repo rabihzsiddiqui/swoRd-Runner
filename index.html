@@ -182,8 +182,10 @@ function loadSprite(key, src) {
 const C = {
   sky0:    "#1d6cb0",   // zenith, kept deep so the HUD stays readable over it
   sky1:    "#4e9ad2",   // horizon
-  far:     "#7fa9c6",   // distant hills, hazed toward the sky
+  far:     "#7fa9c6",   // distant mountains, hazed toward the sky
+  mid:     "#5f9973",   // rolling hills, between the mountain haze and the treeline
   near:    "#437a3c",   // nearer treeline
+  tree:    "#2f5e34",   // individual trees, a step closer and darker than the treeline
   ground:  "#4f9e4a",   // grass
   line:    "#2f6a2b",
   turf:    "rgba(26,74,26,0.5)",
@@ -1782,7 +1784,10 @@ function render() {
 
   ctx.fillStyle = grad; ctx.fillRect(0, 0, W, G);
 
-  // parallax silhouettes
+  // parallax silhouettes, back to front: mountains, rolling hills, treeline
+  // blocks, individual trees. Each layer scrolls at its own fraction of
+  // S.distance (closer layers move faster) and every shape is placed purely
+  // as a function of its own index, so nothing jitters between frames.
   ctx.fillStyle = C.far;
   for (let i = 0; i < 7; i++) {
     const w = 150, x = ((i * 190 - S.distance * 0.18) % (W + 340)) - 170;
@@ -1790,10 +1795,28 @@ function render() {
     ctx.moveTo(x, G); ctx.lineTo(x + w / 2, G - 92 - (i % 3) * 26); ctx.lineTo(x + w, G);
     ctx.fill();
   }
+  ctx.fillStyle = C.mid;
+  for (let i = 0; i < 6; i++) {
+    const w = 200, x = ((i * 220 - S.distance * 0.28) % (W + 400)) - 200;
+    const bump = 30 + (i % 3) * 15;
+    ctx.beginPath();
+    ctx.moveTo(x, G);
+    ctx.quadraticCurveTo(x + w / 2, G - bump * 2, x + w, G);
+    ctx.fill();
+  }
   ctx.fillStyle = C.near;
   for (let i = 0; i < 9; i++) {
     const x = ((i * 130 - S.distance * 0.42) % (W + 260)) - 130;
     ctx.fillRect(x, G - 30 - (i % 4) * 9, 74, 40);
+  }
+  ctx.fillStyle = C.tree;
+  for (let i = 0; i < 12; i++) {
+    const x = ((i * 97 - S.distance * 0.5) % (W + 220)) - 110;
+    const trunk = 12 + (i % 3) * 5, r = 9 + (i % 4) * 3;
+    ctx.fillRect(x - 2, G - trunk, 4, trunk);
+    ctx.beginPath();
+    ctx.arc(x, G - trunk, r, 0, 6.2832);
+    ctx.fill();
   }
 
   ctx.fillStyle = C.ground; ctx.fillRect(0, G, W, H - G);
