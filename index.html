@@ -1759,9 +1759,19 @@ function painterFor(type) {
 function render() {
   const W = CONFIG.width, H = CONFIG.height, G = CONFIG.groundY;
 
+  const grad = ctx.createLinearGradient(0, 0, 0, G);
+  grad.addColorStop(0, C.sky0); grad.addColorStop(1, C.sky1);
+
+  // Shake shifts everything drawn below by a few px, which would otherwise
+  // uncover a sliver of unpainted buffer at whichever edge it pulls away
+  // from. This base fill covers that sliver, so it has to match the real
+  // scene at each edge: the same sky gradient above the ground line, grass
+  // below it, not one flat colour for the whole buffer.
   ctx.setTransform(1, 0, 0, 1, 0, 0);
-  ctx.fillStyle = C.sky1;
-  ctx.fillRect(0, 0, W, H);
+  ctx.fillStyle = grad;
+  ctx.fillRect(0, 0, W, G);
+  ctx.fillStyle = C.ground;
+  ctx.fillRect(0, G, W, H - G);
 
   // shake in whole buffer pixels, so it never blurs the grid.
   // note: no ctx.clip() here on purpose. clip() intersects rather than
@@ -1770,8 +1780,6 @@ function render() {
   const sy = Math.round((Math.random() - 0.5) * S.shake);
   ctx.setTransform(1, 0, 0, 1, sx, sy);
 
-  const grad = ctx.createLinearGradient(0, 0, 0, G);
-  grad.addColorStop(0, C.sky0); grad.addColorStop(1, C.sky1);
   ctx.fillStyle = grad; ctx.fillRect(0, 0, W, G);
 
   // parallax silhouettes
@@ -1886,6 +1894,19 @@ function render() {
   dctx.fillRect(0, groundScreenY, canvas.width, canvas.height - groundScreenY);
   dctx.drawImage(buffer, view.ox, view.oy,
                  CONFIG.width * view.scale, CONFIG.height * view.scale);
+
+  // The ready/paused/dead screens dim the whole buffer; letterboxTint carries
+  // that same darkness (set in drawHud/panel) onto the letterbox bars, so the
+  // dimmed backdrop reaches the true screen edges instead of stopping at the
+  // old 800x360 boundary.
+  if (letterboxTint > 0) {
+    const bw = CONFIG.width * view.scale, bh = CONFIG.height * view.scale;
+    dctx.fillStyle = "rgba(14,17,22," + letterboxTint + ")";
+    if (view.oy > 0) dctx.fillRect(0, 0, canvas.width, view.oy);
+    if (view.oy + bh < canvas.height) dctx.fillRect(0, view.oy + bh, canvas.width, canvas.height - (view.oy + bh));
+    if (view.ox > 0) dctx.fillRect(0, view.oy, view.ox, bh);
+    if (view.ox + bw < canvas.width) dctx.fillRect(view.ox + bw, view.oy, canvas.width - (view.ox + bw), bh);
+  }
 }
 
 // a small katana badge that mirrors the equipped blade, so the HUD and the
@@ -2012,9 +2033,15 @@ function drawSpeaker(x, y, on) {
   }
 }
 
+// How dark the ready/paused/dead backdrop is this frame, 0..1. Set here and
+// in panel(), then read by render() to extend the same tint onto the
+// letterbox bars outside the buffer.
+let letterboxTint = 0;
+
 function drawHud() {
   const W = CONFIG.width, H = CONFIG.height;
   UI.buttons.length = 0;
+  letterboxTint = 0;
   ctx.textAlign = "left";
   ctx.fillStyle = C.text;
   ctx.font = "700 26px ui-monospace, monospace";
@@ -2054,6 +2081,7 @@ function drawHud() {
   }
 
   if (S.phase === "ready") {
+    letterboxTint = 0.72;
     ctx.fillStyle = "rgba(14,17,22,0.72)";
     ctx.fillRect(0, 0, W, H);
     ctx.textAlign = "center";
@@ -2092,6 +2120,7 @@ function drawHud() {
   }
 
   if (paused) {
+    letterboxTint = 0.78;
     ctx.fillStyle = "rgba(14,17,22,0.78)";
     ctx.fillRect(0, 0, W, H);
     ctx.textAlign = "center";
@@ -2137,6 +2166,7 @@ function drawHud() {
 function panel(lines, fade) {
   const W = CONFIG.width, H = CONFIG.height;
   const a = fade === undefined ? 1 : Math.max(0, Math.min(1, fade));
+  letterboxTint = 0.72 * a;
   if (a <= 0) return;
   ctx.globalAlpha = a;
   ctx.fillStyle = "rgba(14,17,22,0.72)";
