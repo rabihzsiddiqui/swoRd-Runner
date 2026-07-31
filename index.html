@@ -708,6 +708,13 @@ bindTouchButton(document.getElementById("btnAttack"), pressAttack);
 const overlap = (a, b) =>
   a.x < b.x + b.w && a.x + a.w > b.x && a.y < b.y + b.h && a.y + a.h > b.y;
 
+// JS's % keeps the sign of its left operand, so once S.distance grows past
+// a background layer's own span the raw modulo goes negative and stays
+// negative forever, parking every shape in that layer off the left edge for
+// good. This always folds back into [0, m), so parallax scrolling never
+// runs out no matter how long a run goes.
+const wrap = (n, m) => ((n % m) + m) % m;
+
 function playerBox() {
   // hitbox is deliberately narrower than the sprite; players read that as fair
   return { x: CONFIG.player.x + 4, y: S.player.y + 3,
@@ -1859,14 +1866,14 @@ function render() {
   // as a function of its own index, so nothing jitters between frames.
   ctx.fillStyle = C.far;
   for (let i = 0; i < 7; i++) {
-    const w = 150, x = ((i * 190 - S.distance * 0.18) % (W + 340)) - 170;
+    const w = 150, x = wrap(i * 190 - S.distance * 0.18, W + 340) - 170;
     ctx.beginPath();
     ctx.moveTo(x, G); ctx.lineTo(x + w / 2, G - 92 - (i % 3) * 26); ctx.lineTo(x + w, G);
     ctx.fill();
   }
   ctx.fillStyle = C.mid;
   for (let i = 0; i < 6; i++) {
-    const w = 200, x = ((i * 220 - S.distance * 0.28) % (W + 400)) - 200;
+    const w = 200, x = wrap(i * 220 - S.distance * 0.28, W + 400) - 200;
     const bump = 30 + (i % 3) * 15;
     ctx.beginPath();
     ctx.moveTo(x, G);
@@ -1875,12 +1882,12 @@ function render() {
   }
   ctx.fillStyle = C.near;
   for (let i = 0; i < 9; i++) {
-    const x = ((i * 130 - S.distance * 0.42) % (W + 260)) - 130;
+    const x = wrap(i * 130 - S.distance * 0.42, W + 260) - 130;
     ctx.fillRect(x, G - 30 - (i % 4) * 9, 74, 40);
   }
   ctx.fillStyle = C.tree;
   for (let i = 0; i < 12; i++) {
-    const x = ((i * 97 - S.distance * 0.5) % (W + 220)) - 110;
+    const x = wrap(i * 97 - S.distance * 0.5, W + 220) - 110;
     const trunk = 12 + (i % 3) * 5, r = 9 + (i % 4) * 3;
     ctx.fillRect(x - 2, G - trunk, 4, trunk);
     ctx.beginPath();
@@ -1893,7 +1900,7 @@ function render() {
   ctx.beginPath(); ctx.moveTo(0, G + 1); ctx.lineTo(W, G + 1); ctx.stroke();
   ctx.strokeStyle = C.turf;
   for (let i = 0; i < 22; i++) {
-    const x = ((i * 44 - S.distance) % (W + 88)) - 44;
+    const x = wrap(i * 44 - S.distance, W + 88) - 44;
     ctx.beginPath(); ctx.moveTo(x, G + 16); ctx.lineTo(x + 22, G + 16); ctx.stroke();
   }
 
