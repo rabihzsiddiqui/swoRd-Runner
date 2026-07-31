@@ -276,6 +276,9 @@ const SKINS = [
     musicLoop: { start: 8, end: 40 },
     swatch: ["#3f9c4a", "#8a5a2b", "#f2c9a0"],
     limb: 1.14, swordStyle: "straight",
+    // held out forward and up while running, not holstered behind him like
+    // the other skins: the default carry angle rotated a half turn
+    carryAngle: 2.45 - Math.PI,
     art: { skin:"#f2c9a0", skinDark:"#c98f66", hair:"#9c5a30", hairHi:"#c07d45",
            tunic:"#3f9c4a", tunicDark:"#2a6f33", tunicHem:"#1e5426",
            sleeve:"#f0ece1", sleeveDark:"#bab6ac",
@@ -1583,7 +1586,12 @@ function drawCharacter() {
   if (!S.death) {
     const sw = sword();
     const held = s.swordAng !== null;
-    drawSword(hand, held ? s.swordAng : 2.45, held ? sw.reach : sw.reach * 0.72, sw);
+    // 2.45 rad is the default holster: blade trailing back and down, behind
+    // the runner. A skin can override this to carry the sword differently
+    // while idle/running; the attack swing itself always uses s.swordAng
+    // and is untouched by this.
+    const carryAngle = SK().carryAngle != null ? SK().carryAngle : 2.45;
+    drawSword(hand, held ? s.swordAng : carryAngle, held ? sw.reach : sw.reach * 0.72, sw);
   }
 }
 
