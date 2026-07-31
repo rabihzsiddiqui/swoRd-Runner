@@ -238,11 +238,15 @@ const SKINS = [
   {
     id: "2b", name: "THE ANDROID",
     music: ["music/2b.mp3", "2b.mp3", "./music/2b.mp3"],
-    // ruined-city palette: duller and greyer than the daytime default, fog
-    // instead of blue sky, a skyline instead of mountains and rolling hills
-    bg: { sky0:"#8b9384", sky1:"#d6dcc4",
-          far:"#8b9086", mid:"#767b6c", near:"#5b6152", tree:"#454a3d",
+    // ruined-city palette: duller and greyer than the daytime default, a
+    // skyline instead of mountains and rolling hills. Sky clears toward
+    // true blue overhead, hazier and paler down near the ruins. growth is
+    // nature reclaiming the place: patches of vivid green sitting right on
+    // the ground, the one deliberately bright color in the whole scene.
+    bg: { sky0:"#7fa3c4", sky1:"#dbdfcb",
+          far:"#8e8e89", mid:"#797970", near:"#5c5c54", tree:"#4f6b47",
           ground:"#79806a", line:"#565c49", turf:"rgba(40,44,34,0.45)",
+          growth:"#5a8a48",
           style:"buildings" },
     swatch: ["#141419", "#e9ecf2", "#efe3d8"],
     limb: 1.0, swordStyle: "katana",
@@ -1932,10 +1936,14 @@ function render() {
     if (BG.style === "buildings") {
       const w = 55 + (i % 3) * 18, h = 130 + (i % 4) * 34;
       const tilt = i % 5 === 2 ? 0.05 : i % 5 === 4 ? -0.045 : 0;
+      // pivoting a tilted building around a point ON the ground line swings
+      // one bottom corner up above it, opening a gap the ground fill can't
+      // cover. Extending the rect a few px past the pivot keeps the whole
+      // base submerged no matter which way it leans.
       ctx.save();
       ctx.translate(x + w / 2, G);
       ctx.rotate(tilt);
-      ctx.fillRect(-w / 2, -h, w, h);
+      ctx.fillRect(-w / 2, -h, w, h + 8);
       ctx.restore();
     } else {
       const w = 150;
@@ -1953,7 +1961,7 @@ function render() {
       ctx.save();
       ctx.translate(x + w / 2, G);
       ctx.rotate(tilt);
-      ctx.fillRect(-w / 2, -h, w, h);
+      ctx.fillRect(-w / 2, -h, w, h + 8);
       ctx.restore();
     } else {
       const w = 200, bump = 30 + (i % 3) * 15;
@@ -1996,6 +2004,22 @@ function render() {
   for (let i = 0; i < 22; i++) {
     const x = wrap(i * 44 - S.distance, W + 88) - 44;
     ctx.beginPath(); ctx.moveTo(x, G + 16); ctx.lineTo(x + 22, G + 16); ctx.stroke();
+  }
+
+  // Nature reclaiming the ruins: sparse clumps of a brighter green sitting
+  // right on the ground line, skipping most indices so they read as patches
+  // in certain spots rather than a continuous strip. Only skins that set a
+  // growth color get these; the default grass ground has no need for them.
+  if (BG.growth) {
+    ctx.fillStyle = BG.growth;
+    for (let i = 0; i < 16; i++) {
+      if (i % 5 === 0 || i % 5 === 3) continue;    // irregular gaps between clumps
+      const x = wrap(i * 51 + 26 - S.distance, W + 102) - 51;
+      const r = 5 + (i % 4) * 2, gy = G - 1;
+      ctx.beginPath(); ctx.arc(x, gy, r, 0, 6.2832); ctx.fill();
+      ctx.beginPath(); ctx.arc(x - r * 0.9, gy + 2, r * 0.6, 0, 6.2832); ctx.fill();
+      ctx.beginPath(); ctx.arc(x + r * 0.9, gy + 2, r * 0.6, 0, 6.2832); ctx.fill();
+    }
   }
 
   for (const o of S.obstacles) {
