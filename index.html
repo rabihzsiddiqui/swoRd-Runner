@@ -204,7 +204,7 @@ const C = {
    ============================================================ */
 const SKINS = [
   {
-    id: "runner", name: "THE RUNNER", blurb: "green tunic, black ponytail",
+    id: "runner", name: "THE RUNNER",
     music: null,   // silent by design
     swatch: ["#52b788", "#15151f", "#f2c9a0"],
     limb: 1.0, swordStyle: "katana",
@@ -224,7 +224,7 @@ const SKINS = [
     ]
   },
   {
-    id: "2b", name: "2B", blurb: "black dress, silver bob, blindfold",
+    id: "2b", name: "THE ANDROID",
     music: ["music/2b.mp3", "2b.mp3", "./music/2b.mp3"],
     swatch: ["#141419", "#e9ecf2", "#efe3d8"],
     limb: 1.0, swordStyle: "katana",
@@ -267,7 +267,7 @@ const SKINS = [
     ]
   },
   {
-    id: "link", name: "LINK", blurb: "green cap, brown hair, straight blade",
+    id: "link", name: "THE HERO",
     music: ["music/link.mp3", "link.mp3", "./music/link.mp3"],
     swatch: ["#3f9c4a", "#8a5a2b", "#f2c9a0"],
     limb: 1.14, swordStyle: "straight",
@@ -592,7 +592,7 @@ function skinPicker(y) {
       applySkin(i);
       musicArm();
       musicSwitchTo(SK());            // cross-fades: the old track fades out
-    }, { on: i === skinIdx, swatch: sk.swatch, sub: sk.blurb });
+    }, { on: i === skinIdx, swatch: sk.swatch });
     x += cw + gap;
   }
 }
