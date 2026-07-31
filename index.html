@@ -182,10 +182,10 @@ function loadSprite(key, src) {
 const C = {
   sky0:    "#1d6cb0",   // zenith, kept deep so the HUD stays readable over it
   sky1:    "#4e9ad2",   // horizon
-  far:     "#7fa9c6",   // distant mountains, hazed toward the sky
-  mid:     "#5f9973",   // rolling hills, between the mountain haze and the treeline
-  near:    "#437a3c",   // nearer treeline
-  tree:    "#2f5e34",   // individual trees, a step closer and darker than the treeline
+  far:     "#89aec7",   // distant mountains, hazed toward the sky
+  mid:     "#6fa08a",   // rolling hills, between the mountain haze and the treeline
+  near:    "#587a5c",   // nearer treeline, muted so it reads as backdrop, not a target
+  tree:    "#3f5b46",   // individual trees, desaturated so a red enemy never reads as one
   ground:  "#4f9e4a",   // grass
   line:    "#2f6a2b",
   turf:    "rgba(26,74,26,0.5)",
@@ -296,7 +296,10 @@ const SKINS = [
       // All over the head, not behind it: the cap covers the back of the skull,
       // so it has to paint after the head circle or the head paints over it.
       front: [
-        { fill:"#3f9c4a", pts:[
+        // outlined in the cap's own dark shade rather than the usual ink: a
+        // black seam here read as the cap being a separate object stuck to
+        // the back of his head instead of growing out of it
+        { fill:"#3f9c4a", stroke:"#2a6f33", pts:[
           [2.8,6.4],[-1.2,7.6],[-5.6,6.2],[-8.0,2.0],[-7.6,-3.2],[-4.2,-6.2],
           [-1.4,-6.6],[-0.4,-1.6],[0.8,3.4]] },
         // lock falling in front of the ear, past the jaw
@@ -1422,7 +1425,7 @@ function drawSword(hand, ang, len, sw) {
 // where forward is the direction she faces and up runs along the spine. They
 // rotate with the head automatically. Physics is reserved for things that should
 // actually swing, like a ponytail or a cap tail; a bob and a fringe should not.
-function headShape(k, pts, fill, lw) {
+function headShape(k, pts, fill, lw, stroke) {
   const P = pts.map(([f, u]) => ({
     x: k.head.x + k.perp.x * f + k.spine.x * u,
     y: k.head.y + k.perp.y * f + k.spine.y * u
@@ -1436,7 +1439,7 @@ function headShape(k, pts, fill, lw) {
     ctx.quadraticCurveTo(a.x, a.y, m.x, m.y);
   }
   ctx.closePath();
-  ctx.strokeStyle = INK; ctx.lineWidth = lw === undefined ? 1.8 : lw;
+  ctx.strokeStyle = stroke || INK; ctx.lineWidth = lw === undefined ? 1.8 : lw;
   ctx.lineJoin = "round"; ctx.stroke();
   ctx.fillStyle = fill; ctx.fill();
 }
@@ -1514,7 +1517,7 @@ function drawCharacter() {
   // Draw order matters more than the shapes here, and getting it wrong is what
   // made this head unreadable: BACK hair, head, MID hair (over the face but under
   // the features), then the visor or eye, then FRONT hair and the ear on top.
-  if (HA.back) for (const p of HA.back) headShape(s, p.pts, p.fill);
+  if (HA.back) for (const p of HA.back) headShape(s, p.pts, p.fill, undefined, p.stroke);
 
   if (SKN.oneHead) {
     // One plain circle for the face, with hair laid over it. No ink disc behind
@@ -1542,7 +1545,7 @@ function drawCharacter() {
     ctx.beginPath(); ctx.arc(head.x + perp.x * 1.6, head.y + perp.y * 1.6 + 0.4, 5.1, 0, 6.2832); ctx.fill();
   }
 
-  if (HA.mid) for (const p of HA.mid) headShape(s, p.pts, p.fill);
+  if (HA.mid) for (const p of HA.mid) headShape(s, p.pts, p.fill, undefined, p.stroke);
 
   if (SKN.face === "blindfold") {                      // visor: wide at the back,
     headShape(s, SKN.visor, "#101015", 1.4);           // tapering to a point at the nose
@@ -1560,8 +1563,10 @@ function drawCharacter() {
     ctx.stroke();
   }
 
-  if (HA.front) for (const p of HA.front) headShape(s, p.pts, p.fill);
-  if (SKN.ear) headShape(s, [[1.6, 1.8], [-3.6, 0.4], [1.2, -2.6]], ART.skin, 1.3);
+  if (HA.front) for (const p of HA.front) headShape(s, p.pts, p.fill, undefined, p.stroke);
+  // elven: a slanted parallelogram swept up and back to a point, not the
+  // rounded human ear the other skins get
+  if (SKN.ear) headShape(s, [[1.4, -2.0], [0.6, -1.5], [-2.4, 2.7], [-1.6, 2.2]], ART.skin, 1.3);
   if (SKN.band) {                                      // hairband over the crown
     const up = Math.atan2(spine.y, spine.x);
     const bo = SKN.band.off || [-0.8, 0];
@@ -1864,6 +1869,11 @@ function render() {
   // blocks, individual trees. Each layer scrolls at its own fraction of
   // S.distance (closer layers move faster) and every shape is placed purely
   // as a function of its own index, so nothing jitters between frames.
+  // Faded a step below full opacity and desaturated in C, so the whole set
+  // recedes behind the fully-opaque foreground instead of competing with it
+  // for attention (the trees especially: a single vivid circle for a canopy
+  // read too much like a slashable enemy from a distance).
+  ctx.globalAlpha = 0.85;
   ctx.fillStyle = C.far;
   for (let i = 0; i < 7; i++) {
     const w = 150, x = wrap(i * 190 - S.distance * 0.18, W + 340) - 170;
@@ -1888,12 +1898,16 @@ function render() {
   ctx.fillStyle = C.tree;
   for (let i = 0; i < 12; i++) {
     const x = wrap(i * 97 - S.distance * 0.5, W + 220) - 110;
-    const trunk = 12 + (i % 3) * 5, r = 9 + (i % 4) * 3;
-    ctx.fillRect(x - 2, G - trunk, 4, trunk);
-    ctx.beginPath();
-    ctx.arc(x, G - trunk, r, 0, 6.2832);
-    ctx.fill();
+    const trunk = 12 + (i % 3) * 5, r = 7 + (i % 4) * 2;
+    const cy = G - trunk;
+    ctx.fillRect(x - 2, cy, 4, trunk);
+    // three overlapping lobes, not one clean circle: a lone round canopy
+    // was too easy to mistake for a round, slashable enemy at a glance
+    ctx.beginPath(); ctx.arc(x, cy - r * 0.3, r, 0, 6.2832); ctx.fill();
+    ctx.beginPath(); ctx.arc(x - r * 0.8, cy + r * 0.25, r * 0.72, 0, 6.2832); ctx.fill();
+    ctx.beginPath(); ctx.arc(x + r * 0.8, cy + r * 0.25, r * 0.72, 0, 6.2832); ctx.fill();
   }
+  ctx.globalAlpha = 1;
 
   ctx.fillStyle = C.ground; ctx.fillRect(0, G, W, H - G);
   ctx.strokeStyle = C.line; ctx.lineWidth = 2;
