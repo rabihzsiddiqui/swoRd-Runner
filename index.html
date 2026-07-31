@@ -180,6 +180,20 @@ function loadSprite(key, src) {
    once. That is why everything gains a dark INK outline below, which is what
    daytime pixel art does and night art can skip. */
 const C = {
+  player:  "#e8e4d9",
+  blade:   "#ffd166",
+  armored: "#39414f",
+  soft:    "#c0341c",
+  text:    "#f4f8fb",
+  dim:     "#d3e2ee"
+};
+
+// Background palette, mutable like ART: the scenery colours and shape style
+// (rolling natural terrain vs a ruined skyline) come from the skin's own
+// `bg` config, copied in on applySkin, same mechanism as character colours.
+// Gameplay-signal colours (armored/soft/blade/etc, still in C above) stay
+// fixed across every skin on purpose - only decoration moves.
+const BG = {
   sky0:    "#1d6cb0",   // zenith, kept deep so the HUD stays readable over it
   sky1:    "#4e9ad2",   // horizon
   far:     "#89aec7",   // distant mountains, hazed toward the sky
@@ -189,13 +203,9 @@ const C = {
   ground:  "#4f9e4a",   // grass
   line:    "#2f6a2b",
   turf:    "rgba(26,74,26,0.5)",
-  player:  "#e8e4d9",
-  blade:   "#ffd166",
-  armored: "#39414f",
-  soft:    "#c0341c",
-  text:    "#f4f8fb",
-  dim:     "#d3e2ee"
+  style:   "natural"    // "natural" = triangle mountains + rolling hills; "buildings" = skyline
 };
+const DEFAULT_BG = Object.assign({}, BG);   // fallback for any skin that omits bg
 
 /* ============================================================
    SKINS
@@ -228,6 +238,12 @@ const SKINS = [
   {
     id: "2b", name: "THE ANDROID",
     music: ["music/2b.mp3", "2b.mp3", "./music/2b.mp3"],
+    // ruined-city palette: duller and greyer than the daytime default, fog
+    // instead of blue sky, a skyline instead of mountains and rolling hills
+    bg: { sky0:"#8b9384", sky1:"#d6dcc4",
+          far:"#8b9086", mid:"#767b6c", near:"#5b6152", tree:"#454a3d",
+          ground:"#79806a", line:"#565c49", turf:"rgba(40,44,34,0.45)",
+          style:"buildings" },
     swatch: ["#141419", "#e9ecf2", "#efe3d8"],
     limb: 1.0, swordStyle: "katana",
     art: { skin:"#efe3d8", skinDark:"#c4b5ab", hair:"#e9ecf2", hairHi:"#ffffff",
@@ -296,10 +312,12 @@ const SKINS = [
       // All over the head, not behind it: the cap covers the back of the skull,
       // so it has to paint after the head circle or the head paints over it.
       front: [
-        // outlined in the cap's own dark shade rather than the usual ink: a
-        // black seam here read as the cap being a separate object stuck to
-        // the back of his head instead of growing out of it
-        { fill:"#3f9c4a", stroke:"#2a6f33", pts:[
+        // just the front edge (vertices 7,8,0: temple down to jaw) recolors
+        // to the cap's own dark shade, since that's the stretch that
+        // actually touches skin. A full green outline made the back edge -
+        // where the tail strand overlaps it - look wrong, so that stays
+        // ink like every other silhouette edge in the game.
+        { fill:"#3f9c4a", accent:{ idxs:[7,8,0], color:"#2a6f33" }, pts:[
           [2.8,6.4],[-1.2,7.6],[-5.6,6.2],[-8.0,2.0],[-7.6,-3.2],[-4.2,-6.2],
           [-1.4,-6.6],[-0.4,-1.6],[0.8,3.4]] },
         // lock falling in front of the ear, past the jaw
@@ -335,6 +353,7 @@ function applySkin(i) {
   skinIdx = i;
   localStorage.setItem("swordRunnerSkin", String(i));
   Object.assign(ART, SKINS[i].art);
+  Object.assign(BG, DEFAULT_BG, SKINS[i].bg || {});
   if (typeof S !== "undefined" && S) initStrands();
 }
 
@@ -845,7 +864,7 @@ function update(dt) {
   p.y += p.vy * dt;
   const floor = CONFIG.groundY - CONFIG.player.h;
   if (p.y >= floor) {
-    if (!p.onGround) { S.landT = 0.10; burst(CONFIG.player.x + 12, CONFIG.groundY, 5, C.line); }
+    if (!p.onGround) { S.landT = 0.10; burst(CONFIG.player.x + 12, CONFIG.groundY, 5, BG.line); }
     p.y = floor; p.vy = 0; p.onGround = true;
   }
 
@@ -1008,7 +1027,7 @@ function updateDropped(dt) {
       k.vx *= 0.6;
       k.av *= 0.5;
       k.bounces++;
-      burst(k.x, CONFIG.groundY - 2, 5, C.ground);
+      burst(k.x, CONFIG.groundY - 2, 5, BG.ground);
     } else {
       k.vy = 0; k.vx = 0;
       // come to rest lying flat, whichever way round it happened to land
@@ -1046,7 +1065,7 @@ function updateDeath(dt) {
         d.rotV *= 0.45;
         d.bounces++;
         S.shake = Math.max(S.shake, 6);
-        burst(CONFIG.player.x + 13 + d.x, CONFIG.groundY - 2, 8, C.ground);
+        burst(CONFIG.player.x + 13 + d.x, CONFIG.groundY - 2, 8, BG.ground);
       } else {
         d.vy = 0; d.vx = 0; d.settled = true;
       }
@@ -1077,6 +1096,7 @@ const ART = {
   blade: "#ffd166", bladeHi: "#fff3c4", hilt: "#8a6a3a"
 };
 Object.assign(ART, SKINS[skinIdx].art);   // apply the saved skin before first paint
+Object.assign(BG, DEFAULT_BG, SKINS[skinIdx].bg || {});
 
 const D = Math.PI / 180;
 const POSE_KEYS = ["bob","lean","hipN","kneeN","hipF","kneeF","armN","elbN","armF","elbF"];
@@ -1425,7 +1445,7 @@ function drawSword(hand, ang, len, sw) {
 // where forward is the direction she faces and up runs along the spine. They
 // rotate with the head automatically. Physics is reserved for things that should
 // actually swing, like a ponytail or a cap tail; a bob and a fringe should not.
-function headShape(k, pts, fill, lw, stroke) {
+function headShape(k, pts, fill, lw) {
   const P = pts.map(([f, u]) => ({
     x: k.head.x + k.perp.x * f + k.spine.x * u,
     y: k.head.y + k.perp.y * f + k.spine.y * u
@@ -1439,9 +1459,33 @@ function headShape(k, pts, fill, lw, stroke) {
     ctx.quadraticCurveTo(a.x, a.y, m.x, m.y);
   }
   ctx.closePath();
-  ctx.strokeStyle = stroke || INK; ctx.lineWidth = lw === undefined ? 1.8 : lw;
+  ctx.strokeStyle = INK; ctx.lineWidth = lw === undefined ? 1.8 : lw;
   ctx.lineJoin = "round"; ctx.stroke();
   ctx.fillStyle = fill; ctx.fill();
+}
+
+// Recolors a short run of a headShape's own outline (same points, same
+// midpoint-smoothing math, so it lands exactly on top of the matching
+// stretch of the black outline). idxs is a contiguous list of vertex
+// indices to recolor; everything outside that run stays the default ink,
+// which is what keeps a headwear shape reading as a silhouette against the
+// sky and against anything (like a swinging strand) that overlaps it.
+function headShapeAccent(k, pts, idxs, color, lw) {
+  const P = pts.map(([f, u]) => ({
+    x: k.head.x + k.perp.x * f + k.spine.x * u,
+    y: k.head.y + k.perp.y * f + k.spine.y * u
+  }));
+  const n = P.length;
+  const mid = (a, b) => ({ x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 });
+  const m0 = mid(P[(idxs[0] - 1 + n) % n], P[idxs[0]]);
+  ctx.beginPath();
+  ctx.moveTo(m0.x, m0.y);
+  for (const i of idxs) {
+    const a = P[i], b = P[(i + 1) % n], m = mid(a, b);
+    ctx.quadraticCurveTo(a.x, a.y, m.x, m.y);
+  }
+  ctx.strokeStyle = color; ctx.lineWidth = lw === undefined ? 1.8 : lw;
+  ctx.lineCap = "round"; ctx.lineJoin = "round"; ctx.stroke();
 }
 
 function drawCharacter() {
@@ -1517,7 +1561,7 @@ function drawCharacter() {
   // Draw order matters more than the shapes here, and getting it wrong is what
   // made this head unreadable: BACK hair, head, MID hair (over the face but under
   // the features), then the visor or eye, then FRONT hair and the ear on top.
-  if (HA.back) for (const p of HA.back) headShape(s, p.pts, p.fill, undefined, p.stroke);
+  if (HA.back) for (const p of HA.back) headShape(s, p.pts, p.fill);
 
   if (SKN.oneHead) {
     // One plain circle for the face, with hair laid over it. No ink disc behind
@@ -1545,7 +1589,7 @@ function drawCharacter() {
     ctx.beginPath(); ctx.arc(head.x + perp.x * 1.6, head.y + perp.y * 1.6 + 0.4, 5.1, 0, 6.2832); ctx.fill();
   }
 
-  if (HA.mid) for (const p of HA.mid) headShape(s, p.pts, p.fill, undefined, p.stroke);
+  if (HA.mid) for (const p of HA.mid) headShape(s, p.pts, p.fill);
 
   if (SKN.face === "blindfold") {                      // visor: wide at the back,
     headShape(s, SKN.visor, "#101015", 1.4);           // tapering to a point at the nose
@@ -1563,10 +1607,16 @@ function drawCharacter() {
     ctx.stroke();
   }
 
-  if (HA.front) for (const p of HA.front) headShape(s, p.pts, p.fill, undefined, p.stroke);
+  if (HA.front) for (const p of HA.front) {
+    headShape(s, p.pts, p.fill);
+    if (p.accent) headShapeAccent(s, p.pts, p.accent.idxs, p.accent.color, p.accent.lw);
+  }
   // elven: a slanted parallelogram swept up and back to a point, not the
-  // rounded human ear the other skins get
-  if (SKN.ear) headShape(s, [[1.4, -2.0], [0.6, -1.5], [-2.4, 2.7], [-1.6, 2.2]], ART.skin, 1.3);
+  // rounded human ear the other skins get. Its base sits at cheek height,
+  // well inside the face circle (radius ~6.5) the way a real ear attaches,
+  // but the tip is pushed out past that radius on purpose - anything drawn
+  // fully inside it is the same fill as the face underneath and vanishes.
+  if (SKN.ear) headShape(s, [[0.5, -1.5], [-0.5, -2.1], [-6.5, 3.9], [-5.5, 4.5]], ART.skin, 1.3);
   if (SKN.band) {                                      // hairband over the crown
     const up = Math.atan2(spine.y, spine.x);
     const bo = SKN.band.off || [-0.8, 0];
@@ -1843,7 +1893,7 @@ function render() {
   const W = CONFIG.width, H = CONFIG.height, G = CONFIG.groundY;
 
   const grad = ctx.createLinearGradient(0, 0, 0, G);
-  grad.addColorStop(0, C.sky0); grad.addColorStop(1, C.sky1);
+  grad.addColorStop(0, BG.sky0); grad.addColorStop(1, BG.sky1);
 
   // Shake shifts everything drawn below by a few px, which would otherwise
   // uncover a sliver of unpainted buffer at whichever edge it pulls away
@@ -1853,7 +1903,7 @@ function render() {
   ctx.setTransform(1, 0, 0, 1, 0, 0);
   ctx.fillStyle = grad;
   ctx.fillRect(0, 0, W, G);
-  ctx.fillStyle = C.ground;
+  ctx.fillStyle = BG.ground;
   ctx.fillRect(0, G, W, H - G);
 
   // shake in whole buffer pixels, so it never blurs the grid.
@@ -1866,36 +1916,66 @@ function render() {
   ctx.fillStyle = grad; ctx.fillRect(0, 0, W, G);
 
   // parallax silhouettes, back to front: mountains, rolling hills, treeline
-  // blocks, individual trees. Each layer scrolls at its own fraction of
-  // S.distance (closer layers move faster) and every shape is placed purely
-  // as a function of its own index, so nothing jitters between frames.
-  // Faded a step below full opacity and desaturated in C, so the whole set
+  // blocks, individual trees (or, for a "buildings" skin, a tilted ruined
+  // skyline standing in for the first two). Each layer scrolls at its own
+  // fraction of S.distance (closer layers move faster) and every shape is
+  // placed purely as a function of its own index, so nothing jitters
+  // between frames.
+  // Faded a step below full opacity and desaturated in BG, so the whole set
   // recedes behind the fully-opaque foreground instead of competing with it
   // for attention (the trees especially: a single vivid circle for a canopy
   // read too much like a slashable enemy from a distance).
   ctx.globalAlpha = 0.85;
-  ctx.fillStyle = C.far;
+  ctx.fillStyle = BG.far;
   for (let i = 0; i < 7; i++) {
-    const w = 150, x = wrap(i * 190 - S.distance * 0.18, W + 340) - 170;
-    ctx.beginPath();
-    ctx.moveTo(x, G); ctx.lineTo(x + w / 2, G - 92 - (i % 3) * 26); ctx.lineTo(x + w, G);
-    ctx.fill();
+    const x = wrap(i * 190 - S.distance * 0.18, W + 340) - 170;
+    if (BG.style === "buildings") {
+      const w = 55 + (i % 3) * 18, h = 130 + (i % 4) * 34;
+      const tilt = i % 5 === 2 ? 0.05 : i % 5 === 4 ? -0.045 : 0;
+      ctx.save();
+      ctx.translate(x + w / 2, G);
+      ctx.rotate(tilt);
+      ctx.fillRect(-w / 2, -h, w, h);
+      ctx.restore();
+    } else {
+      const w = 150;
+      ctx.beginPath();
+      ctx.moveTo(x, G); ctx.lineTo(x + w / 2, G - 92 - (i % 3) * 26); ctx.lineTo(x + w, G);
+      ctx.fill();
+    }
   }
-  ctx.fillStyle = C.mid;
+  ctx.fillStyle = BG.mid;
   for (let i = 0; i < 6; i++) {
-    const w = 200, x = wrap(i * 220 - S.distance * 0.28, W + 400) - 200;
-    const bump = 30 + (i % 3) * 15;
-    ctx.beginPath();
-    ctx.moveTo(x, G);
-    ctx.quadraticCurveTo(x + w / 2, G - bump * 2, x + w, G);
-    ctx.fill();
+    const x = wrap(i * 220 - S.distance * 0.28, W + 400) - 200;
+    if (BG.style === "buildings") {
+      const w = 42 + (i % 3) * 16, h = 54 + (i % 3) * 20;
+      const tilt = i % 4 === 1 ? -0.05 : i % 4 === 3 ? 0.04 : 0;
+      ctx.save();
+      ctx.translate(x + w / 2, G);
+      ctx.rotate(tilt);
+      ctx.fillRect(-w / 2, -h, w, h);
+      ctx.restore();
+    } else {
+      const w = 200, bump = 30 + (i % 3) * 15;
+      ctx.beginPath();
+      ctx.moveTo(x, G);
+      ctx.quadraticCurveTo(x + w / 2, G - bump * 2, x + w, G);
+      ctx.fill();
+    }
   }
-  ctx.fillStyle = C.near;
+  // Buildings, not floating boxes: height varies but the base is always
+  // planted a few px into the grass, never above the ground line, and they
+  // stay fully opaque even while the rest of the background is faded -
+  // unlike a hazy mountain or a tree, a building isn't see-through.
+  ctx.globalAlpha = 1;
+  ctx.fillStyle = BG.near;
   for (let i = 0; i < 9; i++) {
     const x = wrap(i * 130 - S.distance * 0.42, W + 260) - 130;
-    ctx.fillRect(x, G - 30 - (i % 4) * 9, 74, 40);
+    const h = 30 + (i % 4) * 9;
+    ctx.fillRect(x, G + 6 - h, 74, h);
   }
-  ctx.fillStyle = C.tree;
+  ctx.globalAlpha = 0.85;
+  ctx.fillStyle = BG.tree;
   for (let i = 0; i < 12; i++) {
     const x = wrap(i * 97 - S.distance * 0.5, W + 220) - 110;
     const trunk = 12 + (i % 3) * 5, r = 7 + (i % 4) * 2;
@@ -1909,10 +1989,10 @@ function render() {
   }
   ctx.globalAlpha = 1;
 
-  ctx.fillStyle = C.ground; ctx.fillRect(0, G, W, H - G);
-  ctx.strokeStyle = C.line; ctx.lineWidth = 2;
+  ctx.fillStyle = BG.ground; ctx.fillRect(0, G, W, H - G);
+  ctx.strokeStyle = BG.line; ctx.lineWidth = 2;
   ctx.beginPath(); ctx.moveTo(0, G + 1); ctx.lineTo(W, G + 1); ctx.stroke();
-  ctx.strokeStyle = C.turf;
+  ctx.strokeStyle = BG.turf;
   for (let i = 0; i < 22; i++) {
     const x = wrap(i * 44 - S.distance, W + 88) - 44;
     ctx.beginPath(); ctx.moveTo(x, G + 16); ctx.lineTo(x + 22, G + 16); ctx.stroke();
@@ -1999,11 +2079,11 @@ function render() {
   // seamless with the buffer drawn on top of it.
   const groundScreenY = view.oy + CONFIG.groundY * view.scale;
   const skyGrad = dctx.createLinearGradient(0, view.oy, 0, groundScreenY);
-  skyGrad.addColorStop(0, C.sky0);
-  skyGrad.addColorStop(1, C.sky1);
+  skyGrad.addColorStop(0, BG.sky0);
+  skyGrad.addColorStop(1, BG.sky1);
   dctx.fillStyle = skyGrad;
   dctx.fillRect(0, 0, canvas.width, groundScreenY);
-  dctx.fillStyle = C.ground;
+  dctx.fillStyle = BG.ground;
   dctx.fillRect(0, groundScreenY, canvas.width, canvas.height - groundScreenY);
 
   // drawImage's destination size must land on whole device pixels. CONFIG.width
