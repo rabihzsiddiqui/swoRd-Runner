@@ -43,14 +43,14 @@
   .touch-btn {
     position: absolute;
     bottom: max(22px, env(safe-area-inset-bottom));
-    width: clamp(92px, 26vmin, 150px);
-    height: clamp(92px, 26vmin, 150px);
+    width: clamp(108px, 32vmin, 180px);
+    height: clamp(108px, 32vmin, 180px);
     border-radius: 50%;
     background: rgba(12,26,18,0.66);
     border: 2px solid rgba(240,248,251,0.55);
     color: #f4f8fb;
-    font: 700 16px ui-monospace, monospace;
-    letter-spacing: 0.04em;
+    font: 700 18px ui-monospace, monospace;
+    letter-spacing: 0.03em;
     display: flex;
     align-items: center;
     justify-content: center;
@@ -75,7 +75,7 @@
 <canvas id="game"></canvas>
 <div class="touch-controls">
   <button type="button" id="btnJump" class="touch-btn jump">JUMP</button>
-  <button type="button" id="btnAttack" class="touch-btn attack">SLASH</button>
+  <button type="button" id="btnAttack" class="touch-btn attack">ATTACK</button>
 </div>
 <script>
 "use strict";
@@ -1892,15 +1892,22 @@ function render() {
   dctx.fillRect(0, 0, canvas.width, groundScreenY);
   dctx.fillStyle = C.ground;
   dctx.fillRect(0, groundScreenY, canvas.width, canvas.height - groundScreenY);
-  dctx.drawImage(buffer, view.ox, view.oy,
-                 CONFIG.width * view.scale, CONFIG.height * view.scale);
+
+  // drawImage's destination size must land on whole device pixels. CONFIG.width
+  // * view.scale is usually fractional, and a fractional edge gets antialiased
+  // against whatever's beneath it (the extension fill), which shows up as a
+  // faint seam right at the old 800x360 boundary. Rounding it removes the
+  // fractional edge, and the letterbox math below reuses the same rounded
+  // size so the two stay pixel-aligned.
+  const bw = Math.round(CONFIG.width * view.scale);
+  const bh = Math.round(CONFIG.height * view.scale);
+  dctx.drawImage(buffer, view.ox, view.oy, bw, bh);
 
   // The ready/paused/dead screens dim the whole buffer; letterboxTint carries
   // that same darkness (set in drawHud/panel) onto the letterbox bars, so the
   // dimmed backdrop reaches the true screen edges instead of stopping at the
   // old 800x360 boundary.
   if (letterboxTint > 0) {
-    const bw = CONFIG.width * view.scale, bh = CONFIG.height * view.scale;
     dctx.fillStyle = "rgba(14,17,22," + letterboxTint + ")";
     if (view.oy > 0) dctx.fillRect(0, 0, canvas.width, view.oy);
     if (view.oy + bh < canvas.height) dctx.fillRect(0, view.oy + bh, canvas.width, canvas.height - (view.oy + bh));
