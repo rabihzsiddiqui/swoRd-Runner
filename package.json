@@ -1,0 +1,11 @@
+{
+  "name": "sword-runner",
+  "version": "1.0.0",
+  "private": true,
+  "description": "An endless runner with a sword. Single-file HTML5 canvas, no build step.",
+  "scripts": {
+    "dev": "npx --yes serve . -l 8000",
+    "verify": "node tools/verify.mjs"
+  },
+  "license": "UNLICENSED"
+}

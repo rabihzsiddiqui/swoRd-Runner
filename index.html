@@ -1,0 +1,2106 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, user-scalable=no">
+<meta name="theme-color" content="#0e1116">
+<title>Sword Runner</title>
+<!--
+  SWORD RUNNER — prototype
+  ------------------------
+  Single file, no build step. Open in a browser and play.
+  Keyboard: Space / Up = jump, X / Right = attack, R = restart
+  Touch:    left half of screen = jump, right half = attack
+
+  Everything tunable lives in CONFIG at the top of the script.
+  Art slots live in SPRITES. Drop in your iPad art with:
+      loadSprite('player', 'art/player.png')
+  Anything without a loaded image draws as a labelled placeholder box,
+  so the game stays playable while art is missing.
+-->
+<style>
+  :root { color-scheme: dark; }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  html, body {
+    height: 100%;
+    background: #0e1116;
+    overflow: hidden;
+    overscroll-behavior: none;
+    touch-action: none;
+    -webkit-user-select: none;
+    user-select: none;
+    -webkit-tap-highlight-color: transparent;
+  }
+  canvas { display: block; width: 100%; height: 100%; }
+</style>
+</head>
+<body>
+<canvas id="game"></canvas>
+<script>
+"use strict";
+
+/* ============================================================
+   CONFIG — tune the whole game from here
+   ============================================================ */
+const CONFIG = {
+  // virtual resolution; everything is authored against this, then scaled
+  width: 800,
+  height: 360,
+  groundY: 300,
+
+  player: { x: 96, w: 26, h: 42 },
+
+  // One canvas size for every character frame, so a sprite sheet is a clean grid.
+  // The 26x42 collision body sits at (ax, ay) inside the frame; everything else
+  // is free space for the ponytail, the sword arc and squash-and-stretch.
+  // Sized to contain the LONGEST sword, so one grid covers every upgrade.
+  frame: { w: 84, h: 106, ax: 10, ay: 34 },
+
+  gravity: 1900,        // px/s^2
+  jumpVelocity: -620,   // px/s   -> ~101px peak, ~0.65s airtime
+  coyoteTime: 0.10,     // grace period after walking off the ground
+  inputBuffer: 0.13,    // how early an input still counts
+
+  // vertical slash: a tall, narrow hitbox. trades horizontal timing precision
+  // for vertical forgiveness, which is the right trade when enemies vary in height
+  attack: { windup: 0.06, active: 0.12, recovery: 0.19,
+            hitTop: -14,    // relative to the player's head, the arc starts overhead
+            hitH: 58 },     // down past the feet
+
+  // Sword levels. reach drives the hitbox AND the drawn blade length, so an
+  // upgrade you can see is an upgrade you can feel. Vertical span never changes,
+  // which keeps lanterns air-only at every level.
+  swords: [
+    { lvl: 1, name: "WORN TACHI", reach: 34, grip: 9, toNext: 2,
+      blade: "#dfe7f2", edge: "#ffffff", hilt: "#8a6a3a", wrap: "#2c3a52",
+      trail: "223,231,242", glow: false, beam: false },
+    { lvl: 2, name: "MOONLIT KATANA", reach: 45, grip: 11, toNext: 3,
+      blade: "#7fe9ff", edge: "#eaffff", hilt: "#ffd166", wrap: "#1d3f68",
+      trail: "127,233,255", glow: true, beam: false },
+    { lvl: 3, name: "TRUE MOONLIT KATANA", reach: 50, grip: 12, toNext: 0,
+      blade: "#c9b6ff", edge: "#ffffff", hilt: "#ffd166", wrap: "#3a2470",
+      trail: "201,182,255", glow: true, beam: true }
+  ],
+
+  // the ranged crescent released on a charged swing
+  beam: {
+    cooldown: 2.6,     // seconds between shots, so it cannot be spammed
+    speed: 780,        // px/s forward, on top of the closing speed of obstacles
+    w: 16,
+    life: 1.1,
+    scoreShare: 1.0    // a beam kill is worth a full kill. anything less measured
+                       // WORSE than Lvl 2, because the beam converts full-price
+                       // slash kills into discounted ones. The cooldown is the
+                       // balance lever; the scoring is not.
+  },
+
+  speedStart: 320,      // px/s
+  speedGain: 11,        // px/s per second survived
+  speedMax: 720,
+
+  spawnGapMin: 250,     // px between obstacles, floor
+  spawnGapVar: 240,     // px of random extra
+  comboChance: 0.30,    // chance a barrier is chased by a ground enemy
+  comboGap: 1.06,       // multiple of one jump arc, so you land straight into it
+  lanternChance: 0.22,  // air-only bonus target, only reachable at jump apex
+  lanternScore: 120,
+
+  killScore: 45,        // base points per kill, multiplied by combo meter
+  distanceScore: 0.022, // points per px travelled
+  multMax: 8,
+
+  hitPause: 0.07,       // freeze frames on a kill, makes hits feel solid
+  restartLock: 0.85     // dead-screen input lockout
+};
+
+/* ============================================================
+   ART SLOTS — replace placeholders here
+   Recommended sizes (2x for crispness) are in sprite-spec.md
+   ============================================================ */
+const SPRITES = {
+  player: null,
+  playerAttack: null,
+  barrier: null,
+  flyer: null,
+  brute: null,
+  lantern: null
+};
+function loadSprite(key, src) {
+  const img = new Image();
+  img.onload = () => { SPRITES[key] = img; };
+  img.src = src;
+}
+
+/* Palette: clear daytime sky over grass.
+   Note on legibility: at night, pure value contrast carried the silhouettes
+   because the background sat at one end of the value range. A daytime sky sits
+   in the MIDDLE, so no single sky value can separate both the light elements
+   (cream sleeves, steel blade) and the mid-tone ones (armor, red enemies) at
+   once. That is why everything gains a dark INK outline below, which is what
+   daytime pixel art does and night art can skip. */
+const C = {
+  sky0:    "#1d6cb0",   // zenith, kept deep so the HUD stays readable over it
+  sky1:    "#4e9ad2",   // horizon
+  far:     "#7fa9c6",   // distant hills, hazed toward the sky
+  near:    "#437a3c",   // nearer treeline
+  ground:  "#4f9e4a",   // grass
+  line:    "#2f6a2b",
+  turf:    "rgba(26,74,26,0.5)",
+  player:  "#e8e4d9",
+  blade:   "#ffd166",
+  armored: "#39414f",
+  soft:    "#c0341c",
+  text:    "#f4f8fb",
+  dim:     "#d3e2ee"
+};
+
+/* ============================================================
+   SKINS
+   A skin changes colours, body profile, hair strands and sword shape.
+   It never touches reach, hitboxes, timings or spawn rules, so every skin
+   plays identically. Strands are simulated chains: each entry becomes its own
+   verlet rope anchored somewhere on the skull.
+   ============================================================ */
+const SKINS = [
+  {
+    id: "runner", name: "THE RUNNER", blurb: "green tunic, black ponytail",
+    music: null,   // silent by design
+    swatch: ["#52b788", "#15151f", "#f2c9a0"],
+    limb: 1.0, swordStyle: "katana",
+    art: { skin:"#f2c9a0", skinDark:"#c98f66", hair:"#15151f", hairHi:"#34344b",
+           tunic:"#52b788", tunicDark:"#2f7f5b", tunicHem:"#1f5c42",
+           sleeve:"#e8e4d9", sleeveDark:"#b3afa6",
+           belt:"#7a5230", boot:"#37374a", bootDark:"#25252f",
+           blade:"#ffd166", bladeHi:"#fff3c4", hilt:"#8a6a3a" },
+    front: [[0,5.0],[0.20,7.0],[0.45,5.4],[0.62,4.4],[0.85,6.2],[1.0,6.8],[1.45,9.0]],
+    back:  [[0,5.4],[0.20,5.4],[0.45,5.0],[0.62,4.8],[0.85,7.2],[1.0,7.6],[1.45,9.6]],
+    shin: null, face: "eye",
+    strands: [{ n:7, seg:4.2, sy:1.5, px:-4.5, w0:5.6, w1:1.2, color:"#15151f" }],
+    swords: [
+      { name:"WORN TACHI" },
+      { name:"MOONLIT KATANA" },
+      { name:"TRUE MOONLIT KATANA" }
+    ]
+  },
+  {
+    id: "2b", name: "2B", blurb: "black dress, silver bob, blindfold",
+    music: ["music/2b.mp3", "2b.mp3", "./music/2b.mp3"],
+    swatch: ["#141419", "#e9ecf2", "#efe3d8"],
+    limb: 1.0, swordStyle: "katana",
+    art: { skin:"#efe3d8", skinDark:"#c4b5ab", hair:"#e9ecf2", hairHi:"#ffffff",
+           tunic:"#1a1a22", tunicDark:"#101016", tunicHem:"#33333f",
+           sleeve:"#2a2a34", sleeveDark:"#191920",
+           belt:"#4a4a58", boot:"#141419", bootDark:"#0b0b10",
+           blade:"#e8ecf4", bladeHi:"#ffffff", hilt:"#2a2a33" },
+    // same feminine profile, but the dress falls to the knee
+    front: [[0,5.0],[0.20,7.0],[0.45,5.4],[0.62,4.4],[0.85,6.4],[1.0,7.2],[1.75,10.5]],
+    back:  [[0,5.4],[0.20,5.4],[0.45,5.0],[0.62,4.8],[0.85,7.4],[1.0,8.0],[1.75,11.0]],
+    shin: "boot", enemySet: "machine",  // tall boots swallow the whole lower leg
+    face: "blindfold", oneHead: true, faceOff: [0.8, -2.4], faceR: 6.2,
+    // arcs around the face, well inside the hair, so a clear band of hair sits
+    // above it. Measured off the sketch: face is 0.43 of the hair's width.
+    // wide at the back, tapering to a point toward the nose
+    visor: [[-3.8,0.0],[1.0,-1.0],[7.0,-2.4],[1.0,-4.0],[-3.8,-4.3]],
+    // Rebuilt from the reference sketch: one bob mass wrapping the whole head
+    // with a tip hanging either side of the face, and nothing else.
+    headArt: {
+      back: [{ fill:"#e9ecf2", pts:[
+        [0.0,10.4],[6.2,9.0],[9.6,4.0],[10.2,-2.0],[9.0,-7.6],[6.4,-9.8],[4.6,-4.8],
+        [-0.5,-3.6],[-5.0,-5.2],[-7.0,-9.8],[-9.4,-7.0],[-10.4,-1.6],[-9.8,4.6],[-6.2,9.0]] }],
+      // One lock only, drawn over the face but under the visor. There used to be a
+      // second on the far side; it read as a blob stuck to her nose. The bob's own
+      // front tip does that job, once the face is small enough not to swallow it.
+      mid: [
+        { fill:"#e9ecf2", pts:[
+          [-0.2,4.0],[2.4,-0.6],[1.6,-8.2],[-1.6,-6.2],[-4.2,-2.2],[-3.2,2.4]] }
+      ]
+    },
+    strands: [],
+    swords: [
+      { name:"VIRTUOUS CONTRACT", blade:"#e8ecf4", edge:"#ffffff",
+        hilt:"#2a2a33", wrap:"#14141a", trail:"232,236,244" },
+      { name:"VIRTUOUS TREATY", blade:"#9fe8ff", edge:"#eaffff",
+        hilt:"#e8ecf4", wrap:"#1b2b3a", trail:"159,232,255" },
+      { name:"TRUE VIRTUOUS CONTRACT", blade:"#d8c9ff", edge:"#ffffff",
+        hilt:"#e8ecf4", wrap:"#2a1f4a", trail:"216,201,255" }
+    ]
+  },
+  {
+    id: "link", name: "LINK", blurb: "green cap, brown hair, straight blade",
+    music: ["music/link.mp3", "link.mp3", "./music/link.mp3"],
+    swatch: ["#3f9c4a", "#8a5a2b", "#f2c9a0"],
+    limb: 1.14, swordStyle: "straight",
+    art: { skin:"#f2c9a0", skinDark:"#c98f66", hair:"#9c5a30", hairHi:"#c07d45",
+           tunic:"#3f9c4a", tunicDark:"#2a6f33", tunicHem:"#1e5426",
+           sleeve:"#f0ece1", sleeveDark:"#bab6ac",
+           belt:"#6b4423", boot:"#6b4423", bootDark:"#4a2f18",
+           blade:"#d8dde6", bladeHi:"#ffffff", hilt:"#7a5230" },
+    // masculine: deeper chest, almost no cinch, no seat projection
+    front: [[0,5.8],[0.20,6.4],[0.45,6.0],[0.62,5.4],[0.85,5.4],[1.0,5.6],[1.45,7.4]],
+    back:  [[0,6.2],[0.20,6.2],[0.45,6.0],[0.62,5.6],[0.85,5.8],[1.0,6.0],[1.45,8.0]],
+    shin: null, face: "eye", ear: true, oneHead: true,
+    // Rebuilt from the reference sketch. Four shapes, nothing else: a round head,
+    // a green cap wedge over the back of it, one lock hanging in front of the ear,
+    // one bang sweeping forward. Earlier versions had eight overlapping pieces
+    // inside a 13px head, which just turned to mud.
+    headArt: {
+      // All over the head, not behind it: the cap covers the back of the skull,
+      // so it has to paint after the head circle or the head paints over it.
+      front: [
+        { fill:"#3f9c4a", pts:[
+          [2.8,6.4],[-1.2,7.6],[-5.6,6.2],[-8.0,2.0],[-7.6,-3.2],[-4.2,-6.2],
+          [-1.4,-6.6],[-0.4,-1.6],[0.8,3.4]] },
+        // lock falling in front of the ear, past the jaw
+        { fill:"#9c5a30", pts:[
+          [2.6,5.2],[0.4,4.8],[-1.6,-3.0],[-0.4,-8.4],[1.8,-7.2],[2.2,-1.0]] },
+        // bang sweeping up and forward off the brow
+        { fill:"#9c5a30", pts:[
+          [2.6,5.6],[5.6,7.8],[8.6,7.0],[7.6,5.0],[4.6,4.2]] }
+      ]
+    },
+    // only the cap tail swings, and it is thicker now so it reads as cloth
+    strands: [
+      { n:8, seg:4.8, sy:2.4, px:-6.4, w0:10.5, w1:0.8, color:"#3f9c4a" }
+    ],
+    swords: [
+      { name:"TRAVELER'S SWORD", blade:"#d8dde6", edge:"#ffffff",
+        hilt:"#7a5230", wrap:"#5a3a20", trail:"216,221,230" },
+      { name:"MASTER SWORD", blade:"#cfe0f0", edge:"#ffffff",
+        hilt:"#4a3f9e", wrap:"#3fbfa8", trail:"160,200,255", gem:"#ffd166" },
+      { name:"TRUE MASTER SWORD", blade:"#9fd8ff", edge:"#eaf8ff",
+        hilt:"#5b4ecf", wrap:"#4fd8c0", trail:"150,210,255", gem:"#ffd166" }
+    ]
+  }
+];
+
+let skinIdx = Number(localStorage.getItem("swordRunnerSkin") || 0);
+if (!(skinIdx >= 0 && skinIdx < SKINS.length)) skinIdx = 0;
+function SK() { return SKINS[skinIdx]; }
+
+// Colours are copied into ART rather than read through the skin everywhere, so
+// the whole character painter keeps working untouched.
+function applySkin(i) {
+  skinIdx = i;
+  localStorage.setItem("swordRunnerSkin", String(i));
+  Object.assign(ART, SKINS[i].art);
+  if (typeof S !== "undefined" && S) initStrands();
+}
+
+function initStrands() {
+  // Deliberately does NOT consult the skeleton: reset() runs before the pose
+  // tables exist. The root is pinned to its real anchor on the first update and
+  // the constraint solver reels the rest in within a frame.
+  const x0 = CONFIG.player.x + 10, y0 = CONFIG.groundY - CONFIG.player.h;
+  S.strands = SK().strands.map(d =>
+    Array.from({ length: d.n }, (_, i) => {
+      const x = x0 - i * d.seg, y = y0;
+      return { x, y, px: x, py: y };
+    }));
+}
+
+const INK = "#16241c";   // one dark outline colour, used on everything readable
+
+/* ============================================================
+   CANVAS + SCALING
+   ============================================================ */
+const canvas = document.getElementById("game");
+const dctx = canvas.getContext("2d");
+
+// Everything is drawn into a fixed 800x360 buffer, then blitted up with
+// nearest-neighbour. That snaps every shape to the low-res grid, which is what
+// makes procedural shapes read as 16-bit art instead of smooth vectors, and it
+// means hand-drawn sprites land pixel-for-pixel later.
+const buffer = document.createElement("canvas");
+buffer.width = CONFIG.width;
+buffer.height = CONFIG.height;
+const ctx = buffer.getContext("2d");
+let view = { scale: 1, ox: 0, oy: 0 };
+
+function resize() {
+  const dpr = Math.min(window.devicePixelRatio || 1, 3);
+  const cw = window.innerWidth, ch = window.innerHeight;
+  canvas.width = Math.floor(cw * dpr);
+  canvas.height = Math.floor(ch * dpr);
+  // assigning width/height resets the context, so re-apply this here
+  dctx.imageSmoothingEnabled = false;
+  const s = Math.min(cw / CONFIG.width, ch / CONFIG.height);
+  view.scale = s * dpr;
+  view.ox = Math.floor((cw - CONFIG.width * s) / 2 * dpr);
+  view.oy = Math.floor((ch - CONFIG.height * s) / 2 * dpr);
+}
+window.addEventListener("resize", resize);
+resize();
+
+/* ============================================================
+   STATE
+   ============================================================ */
+let S;
+function reset() {
+  S = {
+    phase: "ready",          // ready | play | dead
+    t: 0,
+    speed: CONFIG.speedStart,
+    distance: 0,
+    score: 0,
+    mult: 1,
+    swordLvl: 0,       // index into CONFIG.swords
+    lanterns: 0,       // progress toward the next level
+    beams: [],         // airborne crescents from a charged swing
+    beamCd: 0,         // seconds until the beam is charged again
+    levelFlash: 0,     // banner timer after an upgrade
+    best: Number(localStorage.getItem("swordRunnerBest") || 0),
+    freeze: 0,
+    shake: 0,
+    deadTimer: 0,
+
+    player: {
+      y: CONFIG.groundY - CONFIG.player.h,
+      vy: 0,
+      onGround: true,
+      coyote: 0,
+      atkT: -1                // -1 = idle, otherwise seconds into the swing
+    },
+    jumpBuf: 0,
+    atkBuf: 0,
+    runPhase: 0,
+    landT: 0,
+    strands: [],
+
+    obstacles: [],
+    particles: [],
+    death: null,
+    dropped: null,    // the katana once it leaves her hand
+    nextSpawnX: 520,          // world-x of the next spawn
+    pendingCombo: null,
+    lastKill: ""              // floating label
+  };
+  initStrands();
+}
+reset();
+
+const OB = {
+  barrier: { w: 22, h: 46, slashable: false, color: C.armored, label: "JUMP" },
+  brute:   { w: 28, h: 28, slashable: true,  color: C.soft,    label: "SLASH" },
+  flyer:   { w: 30, h: 26, slashable: true,  color: C.soft,    label: "SLASH", hover: 36 },
+  // harmless, and hangs too high to reach from the ground: pure air reward
+  lantern: { w: 22, h: 22, slashable: true,  color: C.blade,   label: "AIR",
+             hover: 96, harmless: true }
+};
+
+function spawn(type, worldX) {
+  const d = OB[type];
+  const y = CONFIG.groundY - (d.hover || 0) - d.h;
+  S.obstacles.push({
+    type, x: worldX, y, w: d.w, h: d.h,
+    slashable: d.slashable, harmless: !!d.harmless,
+    dead: false, counted: false
+  });
+}
+// one full jump arc, in px, at the current running speed
+function jumpArc() {
+  return (Math.abs(CONFIG.jumpVelocity) * 2 / CONFIG.gravity) * S.speed;
+}
+
+
+
+/* ============================================================
+   MUSIC
+   One track per skin. Browsers block audio until the first user gesture, so
+   playback is armed on the first tap or key press.
+
+   Each skin lists SEVERAL candidate paths and they are tried in order, because
+   the commonest reason for silence is simply that the mp3 did not end up in a
+   music/ subfolder next to the HTML. If every path fails the game runs silent
+   and says so next to the speaker icon, rather than failing quietly.
+   ============================================================ */
+const MUSIC = {
+  players: {},
+  currentId: null,
+  armed: false,
+  vol: 0.55,
+  muted: localStorage.getItem("swordRunnerMuted") === "1"
+};
+
+function musicPlayer(skin) {
+  let p = MUSIC.players[skin.id];
+  if (!p) {
+    p = { id: skin.id, paths: skin.music || [], idx: 0, audio: null,
+          dead: !(skin.music && skin.music.length) };
+    MUSIC.players[skin.id] = p;
+  }
+  return p;
+}
+
+function musicOpen(p) {
+  if (p.dead) return null;
+  if (p.audio) return p.audio;
+  const a = new Audio(p.paths[p.idx]);
+  a.loop = true;
+  a.preload = "auto";
+  a.volume = 0;
+  a.addEventListener("error", () => {
+    p.audio = null;
+    p.idx++;
+    if (p.idx >= p.paths.length) p.dead = true;          // out of candidates
+    else if (MUSIC.armed && MUSIC.currentId === p.id) musicStart(p);
+  });
+  p.audio = a;
+  return a;
+}
+
+function musicStart(p) {
+  const a = musicOpen(p);
+  if (!a) return;
+  const pr = a.play();
+  if (pr && pr.catch) pr.catch(() => {});   // still gesture-blocked; retry later
+}
+
+function musicArm() {
+  if (MUSIC.armed) return;
+  MUSIC.armed = true;
+  musicSwitchTo(SK());
+}
+
+function musicSwitchTo(skin) {
+  MUSIC.currentId = skin.id;
+  if (!MUSIC.armed || MUSIC.muted) return;
+  musicStart(musicPlayer(skin));
+}
+
+function musicUpdate(dt) {
+  // Ducked rather than stopped while paused: stopping and restarting pops, and
+  // a fade sounds like the game holding its breath.
+  const target = MUSIC.muted ? 0
+    : (paused || resumeIn > 0) ? MUSIC.vol * 0.35 : MUSIC.vol;
+  for (const id in MUSIC.players) {
+    const p = MUSIC.players[id];
+    if (!p.audio) continue;
+    const want = (id === MUSIC.currentId) ? target : 0;
+    const step = dt * 1.4;
+    const a = p.audio;
+    if (a.volume < want) a.volume = Math.min(want, a.volume + step);
+    else if (a.volume > want) a.volume = Math.max(want, a.volume - step);
+    if (a.volume <= 0.001 && want === 0 && !a.paused) a.pause();
+  }
+}
+
+function musicToggleMute() {
+  MUSIC.muted = !MUSIC.muted;
+  localStorage.setItem("swordRunnerMuted", MUSIC.muted ? "1" : "0");
+  if (!MUSIC.muted) musicSwitchTo(SK());
+}
+
+// true once every candidate path for the current skin has failed to load
+function musicMissing() {
+  const p = MUSIC.players[MUSIC.currentId];
+  return !!(MUSIC.armed && p && p.dead && p.paths.length);
+}
+
+/* ============================================================
+   MENU UI
+   Buttons are declared while drawing and collected into UI.buttons, so the hit
+   rects can never drift out of sync with what is on screen. Pointer coords are
+   mapped back through the same letterbox transform the buffer is blitted with.
+   ============================================================ */
+let paused = false;
+let resumeIn = 0;          // seconds of "get ready" before the world moves again
+const UI = { buttons: [] };
+
+function toVirtual(clientX, clientY) {
+  const dpr = Math.min(window.devicePixelRatio || 1, 3);
+  return { x: (clientX * dpr - view.ox) / view.scale,
+           y: (clientY * dpr - view.oy) / view.scale };
+}
+
+function button(x, y, w, h, label, act, opts) {
+  const o = opts || {};
+  UI.buttons.push({ x, y, w, h, act });
+  ctx.fillStyle = o.on ? "rgba(255,255,255,0.92)" : "rgba(12,26,18,0.66)";
+  ctx.strokeStyle = o.on ? "#ffffff" : "rgba(240,248,251,0.55)";
+  ctx.lineWidth = o.on ? 2.4 : 1.4;
+  ctx.beginPath();
+  if (ctx.roundRect) ctx.roundRect(x, y, w, h, 5); else ctx.rect(x, y, w, h);
+  ctx.fill(); ctx.stroke();
+  if (o.swatch) {
+    for (let i = 0; i < o.swatch.length; i++) {
+      ctx.fillStyle = o.swatch[i];
+      ctx.fillRect(x + 8 + i * 9, y + h - 13, 7, 7);
+    }
+  }
+  ctx.textAlign = o.swatch ? "left" : "center";
+  ctx.fillStyle = o.on ? "#12251a" : C.text;
+  ctx.font = "700 " + (o.size || 12) + "px ui-monospace, monospace";
+  ctx.fillText(label, o.swatch ? x + 8 : x + w / 2, y + (o.swatch ? 16 : h / 2 + 4));
+  if (o.sub) {
+    ctx.fillStyle = o.on ? "rgba(18,37,26,0.75)" : C.dim;
+    ctx.font = "600 8px ui-monospace, monospace";
+    ctx.fillText(o.sub, x + 8, y + 27);
+  }
+  ctx.textAlign = "left";
+}
+
+// the three skin cards, shared by the title screen and the pause menu
+function skinPicker(y) {
+  const W = CONFIG.width, cw = 168, gap = 14;
+  const total = SKINS.length * cw + (SKINS.length - 1) * gap;
+  let x = (W - total) / 2;
+  for (let i = 0; i < SKINS.length; i++) {
+    const sk = SKINS[i];
+    button(x, y, cw, 40, sk.name, () => {
+      if (i === skinIdx) return;
+      applySkin(i);
+      musicArm();
+      musicSwitchTo(SK());            // cross-fades: the old track fades out
+    }, { on: i === skinIdx, swatch: sk.swatch, sub: sk.blurb });
+    x += cw + gap;
+  }
+}
+
+function togglePause() {
+  if (S.phase !== "play") return;
+  if (paused) startCountdown(); else { paused = true; resumeIn = 0; }
+}
+
+// Unpausing straight back into a runner at 700px/s is unfair, so the world holds
+// still for three seconds while the player reads the obstacles ahead.
+function startCountdown() {
+  paused = false;
+  resumeIn = 3;
+  S.jumpBuf = 0; S.atkBuf = 0;   // drop anything queued while the menu was open
+}
+
+/* ============================================================
+   INPUT
+   ============================================================ */
+function pressJump() {
+  musicArm();
+  if (S.phase === "ready") { S.phase = "play"; return; }
+  if (S.phase === "dead") { tryRestart(); return; }
+  S.jumpBuf = CONFIG.inputBuffer;
+}
+function pressAttack() {
+  musicArm();
+  if (S.phase === "ready") { S.phase = "play"; return; }
+  if (S.phase === "dead") { tryRestart(); return; }
+  S.atkBuf = CONFIG.inputBuffer;
+}
+function restartNow() {
+  const b = S.best;
+  reset();
+  S.best = b;
+  S.phase = "play";
+  startCountdown();
+}
+
+function tryRestart() {
+  if (S.deadTimer >= CONFIG.restartLock) { const b = S.best; reset(); S.best = b; S.phase = "play"; }
+}
+
+window.addEventListener("keydown", e => {
+  if (e.repeat) return;
+  const k = e.key.toLowerCase();
+  if (paused || resumeIn > 0) {
+    if (k === "escape" || k === "p") { e.preventDefault(); togglePause(); }
+    return;
+  }
+  if (k === " " || k === "arrowup" || k === "w") { e.preventDefault(); pressJump(); }
+  else if (k === "x" || k === "arrowright" || k === "j") { e.preventDefault(); pressAttack(); }
+  else if (k === "r") { paused = false; S.deadTimer = 99; tryRestart(); }
+  else if (k === "escape" || k === "p") { e.preventDefault(); togglePause(); }
+});
+
+canvas.addEventListener("pointerdown", e => {
+  e.preventDefault();
+  const v = toVirtual(e.clientX, e.clientY);
+  for (const b of UI.buttons) {
+    if (v.x >= b.x && v.x <= b.x + b.w && v.y >= b.y && v.y <= b.y + b.h) { b.act(); return; }
+  }
+  if (paused || resumeIn > 0) return;       // menu and countdown swallow stray taps
+  if (e.clientX < window.innerWidth / 2) pressJump(); else pressAttack();
+}, { passive: false });
+
+/* ============================================================
+   HELPERS
+   ============================================================ */
+const overlap = (a, b) =>
+  a.x < b.x + b.w && a.x + a.w > b.x && a.y < b.y + b.h && a.y + a.h > b.y;
+
+function playerBox() {
+  // hitbox is deliberately narrower than the sprite; players read that as fair
+  return { x: CONFIG.player.x + 4, y: S.player.y + 3,
+           w: CONFIG.player.w - 8, h: CONFIG.player.h - 4 };
+}
+// The equipped sword. Gameplay stats (reach, toNext, beam, glow) always come from
+// CONFIG; the skin only ever supplies names and colours, so every skin plays the
+// same and no skin can change a hitbox.
+function sword() {
+  const base = CONFIG.swords[S.swordLvl];
+  const skin = SK().swords[S.swordLvl];
+  return skin ? Object.assign({}, base, skin) : base;
+}
+
+function attackBox() {
+  const a = CONFIG.attack;
+  const p = S.player;
+  if (p.atkT < a.windup || p.atkT >= a.windup + a.active) return null;
+  return { x: CONFIG.player.x + CONFIG.player.w - 6,
+           y: p.y + a.hitTop, w: sword().reach, h: a.hitH };
+}
+// where the sword pivots from, and how far the tip reaches
+function slashPivot() {
+  return { x: CONFIG.player.x + CONFIG.player.w - 6, y: S.player.y + 18,
+           r: sword().reach, a0: -1.15, a1: 1.15 };
+}
+function burst(x, y, n, color) {
+  for (let i = 0; i < n; i++) {
+    S.particles.push({
+      x, y,
+      vx: (Math.random() - 0.5) * 320 - 40,
+      vy: (Math.random() - 0.8) * 260,
+      life: 0.35 + Math.random() * 0.3, age: 0,
+      s: 2 + Math.random() * 3, color
+    });
+  }
+}
+
+/* ============================================================
+   UPDATE
+   ============================================================ */
+function update(dt) {
+  if (S.freeze > 0) { S.freeze -= dt; return; }
+
+  // animation state advances even on the title and death screens, so she
+  // is never a frozen statue
+  S.landT = Math.max(0, S.landT - dt);
+  S.runPhase += dt / Math.max(0.26, 0.44 * CONFIG.speedStart / S.speed);
+  if (S.death) updateDeath(dt);
+  if (S.dropped) updateDropped(dt);
+  updateHair(dt);
+
+  S.shake = Math.max(0, S.shake - dt * 42);
+  S.levelFlash = Math.max(0, S.levelFlash - dt);
+  for (let i = S.particles.length - 1; i >= 0; i--) {
+    const p = S.particles[i];
+    p.age += dt; p.vy += 1500 * dt; p.x += p.vx * dt; p.y += p.vy * dt;
+    if (p.age >= p.life) S.particles.splice(i, 1);
+  }
+
+  if (S.phase === "dead") { S.deadTimer += dt; return; }
+  if (S.phase !== "play") return;
+
+  S.t += dt;
+  S.speed = Math.min(CONFIG.speedMax, CONFIG.speedStart + CONFIG.speedGain * S.t);
+  const move = S.speed * dt;
+  S.distance += move;
+  S.score += move * CONFIG.distanceScore;
+
+  const p = S.player;
+  const a = CONFIG.attack;
+  const atkTotal = a.windup + a.active + a.recovery;
+
+  // --- attack state machine ---
+  S.atkBuf = Math.max(0, S.atkBuf - dt);
+  S.beamCd = Math.max(0, S.beamCd - dt);
+  if (p.atkT >= 0) {
+    const was = p.atkT;
+    p.atkT += dt;
+    // the crescent leaves the blade the instant the cut goes live
+    if (was < a.windup && p.atkT >= a.windup && sword().beam && S.beamCd <= 0) fireBeam();
+    if (p.atkT >= atkTotal) p.atkT = -1;
+  }
+  if (S.atkBuf > 0 && p.atkT < 0) { p.atkT = 0; S.atkBuf = 0; }
+
+  // --- beams ---
+  for (let i = S.beams.length - 1; i >= 0; i--) {
+    const b = S.beams[i];
+    b.age += dt;
+    b.x += CONFIG.beam.speed * dt;
+    if (b.age >= CONFIG.beam.life || b.x > CONFIG.width + 40) { S.beams.splice(i, 1); continue; }
+    for (const o of S.obstacles) {
+      if (o.dead || !overlap(b, o)) continue;
+      if (!o.slashable) {
+        // armour eats the beam. barriers still have to be jumped, always
+        b.dead = true;
+        burst(o.x, o.y + o.h / 2, 8, sword().blade);
+        break;
+      }
+      o.dead = true;
+      if (o.harmless) collectLantern(o);
+      else {
+        // A beam kill counts as a full kill and builds the meter. It has to:
+        // discounting it made Lvl 3 score LOWER than Lvl 2, since the beam simply
+        // replaces kills the player would have slashed anyway. Its real cost is
+        // the cooldown, and its real upside is safety plus piercing.
+        S.mult = Math.min(CONFIG.multMax, S.mult + 1);
+        S.score += CONFIG.killScore * S.mult * CONFIG.beam.scoreShare;
+        burst(o.x + o.w / 2, o.y + o.h / 2, 10, sword().blade);
+      }
+    }
+    if (b.dead) S.beams.splice(i, 1);
+  }
+
+  // --- jump ---
+  S.jumpBuf = Math.max(0, S.jumpBuf - dt);
+  if (p.onGround) p.coyote = CONFIG.coyoteTime; else p.coyote = Math.max(0, p.coyote - dt);
+  if (S.jumpBuf > 0 && (p.onGround || p.coyote > 0)) {
+    p.vy = CONFIG.jumpVelocity;
+    p.onGround = false;
+    p.coyote = 0;
+    S.jumpBuf = 0;
+  }
+  p.vy += CONFIG.gravity * dt;          // no variable height: jumps commit
+  p.y += p.vy * dt;
+  const floor = CONFIG.groundY - CONFIG.player.h;
+  if (p.y >= floor) {
+    if (!p.onGround) { S.landT = 0.10; burst(CONFIG.player.x + 12, CONFIG.groundY, 5, C.line); }
+    p.y = floor; p.vy = 0; p.onGround = true;
+  }
+
+  // --- spawning, measured in world distance so it scales with speed ---
+  S.nextSpawnX -= move;
+  for (const o of S.obstacles) o.x -= move;
+  if (S.pendingCombo) {
+    S.pendingCombo.at -= move;
+    if (S.pendingCombo.at <= 0) { spawn("brute", CONFIG.width + 20); S.pendingCombo = null; }
+  }
+  if (S.nextSpawnX <= 0) {
+    const roll = Math.random();
+    let type;
+    if (roll < 0.40) type = "barrier";
+    else if (roll < 0.72) type = "brute";
+    else type = "flyer";
+    spawn(type, CONFIG.width + 20);
+
+    let gap = Math.max(CONFIG.spawnGapMin, jumpArc() * 0.95)
+            + Math.random() * CONFIG.spawnGapVar;
+
+    if (type === "barrier" && Math.random() < CONFIG.comboChance) {
+      // land out of the jump directly into a slash
+      const combo = jumpArc() * CONFIG.comboGap;
+      S.pendingCombo = { at: combo };
+      gap = combo + Math.max(CONFIG.spawnGapMin, jumpArc() * 0.95);
+    } else if (type === "barrier" && Math.random() < CONFIG.lanternChance) {
+      // sits just past the barrier, at the height of your jump apex
+      spawn("lantern", CONFIG.width + 20 + jumpArc() * 0.42);
+    }
+    S.nextSpawnX = gap;
+  }
+
+  // --- sword hits ---
+  const hit = attackBox();
+  if (hit) {
+    for (const o of S.obstacles) {
+      if (o.dead || !o.slashable) continue;
+      if (overlap(hit, o)) {
+        o.dead = true;
+        if (o.harmless) collectLantern(o);
+        else {
+          S.mult = Math.min(CONFIG.multMax, S.mult + 1);
+          S.score += CONFIG.killScore * S.mult;
+          burst(o.x + o.w / 2, o.y + o.h / 2, 14, sword().blade);
+        }
+        S.freeze = Math.max(S.freeze, CONFIG.hitPause);
+        S.shake = Math.max(S.shake, 7);
+      }
+    }
+  }
+
+  // --- death, and the combo meter ---
+  const pb = playerBox();
+  for (let i = S.obstacles.length - 1; i >= 0; i--) {
+    const o = S.obstacles[i];
+    if (!o.dead && !o.harmless && overlap(pb, o)) { die(o); return; }
+    if (!o.counted && o.x + o.w < CONFIG.player.x) {
+      o.counted = true;
+      // dodging something you could have killed drops the meter
+      if (o.slashable && !o.harmless && !o.dead) S.mult = 1;
+    }
+    if (o.dead || o.x + o.w < -60) S.obstacles.splice(i, 1);
+  }
+}
+
+// The crescent takes its vertical span straight from the slash hitbox. That is
+// what keeps lanterns air-only: fired from the ground the band sits far below
+// them, and only a swing at the jump apex is high enough to reach one.
+// A lantern pays out and feeds the next upgrade. Shared so that cutting one and
+// beaming one behave identically instead of drifting apart.
+function collectLantern(o) {
+  S.score += CONFIG.lanternScore * S.mult;   // a payout, not a multiplier builder
+  S.lanterns++;
+  if (S.lanterns >= sword().toNext && S.swordLvl < CONFIG.swords.length - 1) {
+    S.swordLvl++;
+    S.lanterns = 0;
+    S.levelFlash = 1.6;
+    S.freeze = 0.16;                         // a longer beat, this is a big moment
+    S.shake = 13;
+    burst(CONFIG.player.x + 20, S.player.y + 18, 26, sword().blade);
+  }
+  burst(o.x + o.w / 2, o.y + o.h / 2, 14, C.blade);
+}
+
+function fireBeam() {
+  const a = CONFIG.attack, p = S.player;
+  S.beams.push({
+    x: CONFIG.player.x + CONFIG.player.w - 6 + sword().reach,
+    y: p.y + a.hitTop,
+    w: CONFIG.beam.w,
+    h: a.hitH,
+    age: 0, dead: false
+  });
+  S.beamCd = CONFIG.beam.cooldown;
+  S.shake = Math.max(S.shake, 5);
+}
+
+function die(killer) {
+  const p = S.player;
+  // Impulse from whatever hit her. Obstacles close at S.speed, so the push is
+  // backward; where they struck her relative to her centre of mass decides the
+  // spin. Struck low sweeps her legs out and she pitches forward. Struck high
+  // drives her chest back and she goes over backward.
+  const comY = p.y + CONFIG.player.h / 2;
+  const hitY = killer ? killer.y + killer.h / 2 : comY;
+  const ry = hitY - comY;                       // positive means struck low
+  const dir = ry >= 0 ? 1 : -1;
+  S.death = {
+    t: 0,
+    pose0: currentPose(),
+    x: 0, y: 0,
+    vx: -S.speed * 0.45,                        // knocked back down the track
+    vy: -300 - Math.max(0, ry) * 10 + p.vy * 0.4, // low hits pop her up
+    rot: 0,
+    rotV: dir * (3.0 + Math.abs(ry) * 0.16),
+    bounces: 0, settled: false
+  };
+  S.phase = "dead";
+  S.deadTimer = 0;
+
+  // The katana leaves her hand. It keeps the momentum of the swing it was in the
+  // middle of, plus a share of the knockback, and tumbles off on its own.
+  const mid = p.atkT >= 0 && p.atkT < CONFIG.attack.windup + CONFIG.attack.active;
+  const pv = slashPivot();
+  S.dropped = {
+    x: pv.x, y: pv.y,
+    ang: p.atkT >= 0 ? (mid ? 0.4 : pv.a1) : 2.45,
+    len: sword().reach,
+    vx: S.death.vx * 0.55 + (mid ? 340 : 170),  // a live swing throws it further
+    vy: S.death.vy * 0.7 - (mid ? 270 : 170),
+    av: mid ? 13 : 7,                           // rad/s, spinning with the cut
+    bounces: 0, settled: false
+  };
+  S.shake = 14;
+  S.freeze = 0.12;
+  burst(CONFIG.player.x + CONFIG.player.w / 2, comY, 26, C.player);
+  const final = Math.floor(S.score);
+  if (final > S.best) { S.best = final; localStorage.setItem("swordRunnerBest", String(final)); }
+}
+
+function updateDropped(dt) {
+  const k = S.dropped;
+  if (k.settled) return;
+  k.vy += 1700 * dt;
+  k.vx *= Math.max(0, 1 - 0.45 * dt);
+  k.x += k.vx * dt;
+  k.y += k.vy * dt;
+  k.ang += k.av * dt;
+  k.av *= Math.max(0, 1 - 1.1 * dt);
+
+  // The blade is what touches the grass, not the hilt, so the whole length has
+  // to be tested. Clamping only the hilt buries the tip up to 22px deep.
+  const floor = CONFIG.groundY - 3;
+  const lowest = () => Math.max(k.y, k.y + Math.sin(k.ang) * k.len);
+  if (lowest() >= floor) {
+    k.y -= lowest() - floor;
+    if (Math.abs(k.vy) > 60 && k.bounces < 3) {
+      k.vy = -k.vy * 0.34;
+      k.vx *= 0.6;
+      k.av *= 0.5;
+      k.bounces++;
+      burst(k.x, CONFIG.groundY - 2, 5, C.ground);
+    } else {
+      k.vy = 0; k.vx = 0;
+      // come to rest lying flat, whichever way round it happened to land
+      const flat = Math.round(k.ang / Math.PI) * Math.PI;
+      k.ang += (flat - k.ang) * Math.min(1, 14 * dt);
+      k.y -= lowest() - floor;                  // stays resting as it lies down
+      if (Math.abs(flat - k.ang) < 0.05) { k.ang = flat; k.y = floor; k.settled = true; }
+    }
+  }
+  k.x = Math.max(-20, Math.min(CONFIG.width + 20, k.x));
+}
+
+function updateDeath(dt) {
+  const d = S.death;
+  d.t += dt;
+  // how far the hip can fall before her body is lying on the grass
+  const rest = CONFIG.groundY - 8 - (S.player.y + 26);
+
+  if (!d.settled) {
+    d.vy += 1900 * dt;
+    d.x += d.vx * dt;
+    d.y += d.vy * dt;
+    d.vx *= Math.max(0, 1 - 0.8 * dt);          // air drag
+    d.rot += d.rotV * dt;
+    d.rot = Math.max(-1.5, Math.min(1.5, d.rot));   // past this her head goes
+                                                    // under the grass; also stops
+                                                    // her windmilling
+    d.rotV *= Math.max(0, 1 - 1.2 * dt);
+
+    if (d.y >= rest) {
+      d.y = rest;
+      if (Math.abs(d.vy) > 70 && d.bounces < 3) {
+        d.vy = -d.vy * 0.30;                    // she bounces, loosely
+        d.vx *= 0.55;
+        d.rotV *= 0.45;
+        d.bounces++;
+        S.shake = Math.max(S.shake, 6);
+        burst(CONFIG.player.x + 13 + d.x, CONFIG.groundY - 2, 8, C.ground);
+      } else {
+        d.vy = 0; d.vx = 0; d.settled = true;
+      }
+    }
+  } else {
+    // come to rest lying on whichever side the spin carried her
+    const target = (d.rot >= 0 ? 1 : -1) * 1.45;
+    d.rot += (target - d.rot) * Math.min(1, 9 * dt);
+    d.rotV = 0;
+  }
+  // she never slides off the front of the screen
+  d.x = Math.max(d.x, -CONFIG.player.x + 8);
+}
+
+/* ============================================================
+   CHARACTER RIG
+   She is drawn from a skeleton rather than from image files, so the
+   animation and the hitbox are driven by the same numbers and cannot
+   desync. Every pose below is also a drawing reference: whatever the
+   rig does on screen is what you trace.
+   ============================================================ */
+const ART = {
+  skin: "#f2c9a0", skinDark: "#c98f66",
+  hair: "#15151f", hairHi: "#34344b",
+  tunic: "#52b788", tunicDark: "#2f7f5b", tunicHem: "#1f5c42",
+  sleeve: "#e8e4d9", sleeveDark: "#b3afa6",
+  belt: "#7a5230", boot: "#37374a", bootDark: "#25252f",
+  blade: "#ffd166", bladeHi: "#fff3c4", hilt: "#8a6a3a"
+};
+Object.assign(ART, SKINS[skinIdx].art);   // apply the saved skin before first paint
+
+const D = Math.PI / 180;
+const POSE_KEYS = ["bob","lean","hipN","kneeN","hipF","kneeF","armN","elbN","armF","elbF"];
+
+/* Run cycle: 4 key poses, mirrored into 8. Angles are radians,
+   0 = straight down, positive = forward. N = near leg, F = far leg. */
+const RUN_KEYS = [
+  // contact: front heel strikes, arms at full opposite swing
+  { bob: 0,   lean:0.20, hipN: 34*D, kneeN: -6*D, hipF:-38*D, kneeF: 30*D,
+    armN:-52*D, elbN: 55*D, armF: 46*D, elbF: 60*D },
+  // down: lowest point, support knee absorbing the weight
+  { bob: 2.5, lean:0.27, hipN: 12*D, kneeN: 34*D, hipF:-24*D, kneeF: 72*D,
+    armN:-28*D, elbN: 72*D, armF: 26*D, elbF: 76*D },
+  // passing: rear leg swings under the body, head at its highest
+  { bob:-1.5, lean:0.15, hipN: -2*D, kneeN:  8*D, hipF:  6*D, kneeF: 94*D,
+    armN:  4*D, elbN: 60*D, armF: -2*D, elbF: 66*D },
+  // up: push-off, support leg fully extended and airborne
+  { bob:-3,   lean:0.23, hipN:-30*D, kneeN: 10*D, hipF: 42*D, kneeF: 34*D,
+    armN: 42*D, elbN: 50*D, armF:-46*D, elbF: 56*D }
+];
+const mirrorPose = k => ({ bob:k.bob, lean:k.lean,
+  hipN:k.hipF, kneeN:k.kneeF, hipF:k.hipN, kneeF:k.kneeN,
+  armN:k.armF, elbN:k.elbF, armF:k.armN, elbF:k.elbN });
+const RUN8 = RUN_KEYS.concat(RUN_KEYS.map(mirrorPose));
+
+/* Jump poses are chosen by vertical velocity, not by a timer, so they
+   never drift out of sync with the physics. */
+// limp sprawl she settles into once killed. angles are measured from
+// straight-down, positive toward the direction she was running.
+const DEATH_POSE = { bob: 0, lean: 0,
+  hipN: 34*D, kneeN: 22*D, hipF:-24*D, kneeF: 52*D,
+  armN:-104*D, elbN: 14*D, armF: 76*D, elbF:-18*D };
+
+const JUMP_POSES = {
+  rise: { bob:-2, lean:0.30, hipN: 46*D, kneeN: 62*D, hipF: 20*D, kneeF: 80*D,
+          armN:-30*D, elbN: 40*D, armF:-50*D, elbF: 50*D },
+  apex: { bob:-1, lean:0.10, hipN: 26*D, kneeN: 28*D, hipF:-22*D, kneeF: 34*D,
+          armN:-14*D, elbN: 26*D, armF: 30*D, elbF: 30*D },
+  fall: { bob: 1, lean:0.22, hipN: 16*D, kneeN:  6*D, hipF:-14*D, kneeF: 18*D,
+          armN: 20*D, elbN: 34*D, armF: 44*D, elbF: 40*D },
+  land: { bob: 4, lean:0.34, hipN: 20*D, kneeN: 58*D, hipF:-18*D, kneeF: 62*D,
+          armN:-40*D, elbN: 74*D, armF: 34*D, elbF: 80*D }
+};
+
+function lerpPose(a, b, t) {
+  const o = {};
+  for (const k of POSE_KEYS) o[k] = a[k] + (b[k] - a[k]) * t;
+  return o;
+}
+function currentPose() {
+  const p = S.player;
+  if (S.death) {
+    // ease out of whatever she was doing into the sprawl
+    return lerpPose(S.death.pose0, DEATH_POSE, Math.min(1, S.death.t / 0.20));
+  }
+  if (!p.onGround) {
+    if (p.vy < -240) return JUMP_POSES.rise;
+    if (p.vy <  200) return JUMP_POSES.apex;
+    return JUMP_POSES.fall;
+  }
+  if (S.landT > 0) return JUMP_POSES.land;
+  const u = (S.runPhase % 1) * 8;
+  const i = Math.floor(u);
+  return lerpPose(RUN8[i % 8], RUN8[(i + 1) % 8], u - i);
+}
+
+/* Skeleton landmarks, all derived from the collision box so the drawing
+   is always attached to the physics. */
+function skeleton() {
+  const p = S.player, pose = currentPose();
+  const a = CONFIG.attack;
+
+  // the attack leans her body through the swing
+  let leanExtra = 0, swordAng = null;
+  if (p.atkT >= 0 && !S.death) {
+    const pv = slashPivot();
+    if (p.atkT < a.windup) {
+      swordAng = pv.a0; leanExtra = -0.20;               // loaded back
+    } else if (p.atkT < a.windup + a.active) {
+      const u = (p.atkT - a.windup) / a.active;
+      swordAng = pv.a0 + (pv.a1 - pv.a0) * u;
+      leanExtra = -0.10 + 0.46 * u;                      // driving forward
+    } else {
+      const u = (p.atkT - a.windup - a.active) / a.recovery;
+      swordAng = pv.a1 - 0.5 * u;
+      leanExtra = 0.36 - 0.26 * u;                       // unwinding
+    }
+  }
+
+  const L = pose.lean + leanExtra + (S.death ? S.death.rot : 0);
+  const hip = { x: CONFIG.player.x + 13 + (S.death ? S.death.x : 0),
+                y: p.y + 26 + pose.bob + (S.death ? S.death.y : 0) };
+  const spine = { x: Math.sin(L), y: -Math.cos(L) };
+  const perp  = { x: Math.cos(L), y: Math.sin(L) };      // points forward
+  const sh   = { x: hip.x + spine.x * 11, y: hip.y + spine.y * 11 };
+  const head = { x: hip.x + spine.x * 20.5, y: hip.y + spine.y * 20.5 };
+  return { p, pose, L, hip, spine, perp, sh, head, swordAng };
+}
+
+function seg(x, y, ang, len, w, color) {
+  const ex = x + Math.sin(ang) * len, ey = y + Math.cos(ang) * len;
+  ctx.lineCap = "round";
+  ctx.strokeStyle = INK; ctx.lineWidth = w + 2;      // outline pass
+  ctx.beginPath(); ctx.moveTo(x, y); ctx.lineTo(ex, ey); ctx.stroke();
+  ctx.strokeStyle = color; ctx.lineWidth = w;
+  ctx.beginPath(); ctx.moveTo(x, y); ctx.lineTo(ex, ey); ctx.stroke();
+  return { x: ex, y: ey };
+}
+function boot(f, ang, dark) {
+  ctx.save();
+  ctx.translate(f.x, f.y); ctx.rotate(-ang * 0.5);
+  ctx.fillStyle = INK;
+  ctx.fillRect(-3.5, -2.5, 9, 6);
+  ctx.fillStyle = dark ? ART.bootDark : ART.boot;
+  ctx.fillRect(-2.5, -1.5, 7, 4);
+  ctx.restore();
+}
+
+/* ---- ponytail: verlet chain, the main motion carrier ---- */
+function strandRoot(d) {
+  const k = skeleton();
+  const sy = d ? d.sy : 1.5, px = d ? d.px : -4.5;
+  return { x: k.head.x + k.perp.x * px + k.spine.x * sy,
+           y: k.head.y + k.perp.y * px + k.spine.y * sy };
+}
+
+function updateHair(dt) {
+  // Running forward drags hair backward. The wind has to DOMINATE gravity, or a
+  // long strand just hangs and she reads as standing still however fast the world
+  // scrolls. On death the wind stops and everything drops.
+  const alive = S.phase !== "dead";
+  const defs = SK().strands;
+  for (let si = 0; si < S.strands.length; si++) {
+    const h = S.strands[si], d = defs[si];
+    if (!h || !d) continue;
+    // Per strand, because hair mass changes what the wind can do to it. A light
+    // ponytail streams almost level; a short heavy bob lock has to HANG, with
+    // only a little sway, or it reads as a stubby tail sticking out the back.
+    const wind = alive ? -S.speed * (d.wind === undefined ? 0.9 : d.wind) : 0;
+    const grav = alive ? (d.grav === undefined ? 18 : d.grav) : 900;
+    const a = strandRoot(d);
+    h[0].x = a.x; h[0].y = a.y;
+    for (let i = 1; i < h.length; i++) {
+      const n = h[i];
+      const vx = (n.x - n.px) * 0.90, vy = (n.y - n.py) * 0.90;
+      n.px = n.x; n.py = n.y;
+      n.x += vx + wind * dt * dt * 60;
+      n.y += vy + grav * dt * dt * 60;
+    }
+    for (let pass = 0; pass < 3; pass++) {
+      for (let i = 1; i < h.length; i++) {
+        const a0 = h[i - 1], b = h[i];
+        const dx = b.x - a0.x, dy = b.y - a0.y;
+        const dist = Math.hypot(dx, dy) || 1;
+        const f = (dist - d.seg) / dist;
+        if (i > 1) { a0.x += dx * f * 0.25; a0.y += dy * f * 0.25; }
+        b.x -= dx * f * 0.75; b.y -= dy * f * 0.75;
+      }
+    }
+    // hair lies ON the grass rather than sinking through it once she collapses
+    for (let i = 0; i < h.length; i++) {
+      if (h[i].y > CONFIG.groundY - 2) { h[i].y = CONFIG.groundY - 2; h[i].py = h[i].y; }
+    }
+  }
+}
+function drawHair(front) {
+  const defs = SK().strands;
+  ctx.lineCap = "round";
+  for (let si = 0; si < S.strands.length; si++) {
+    const h = S.strands[si], d = defs[si];
+    if (!h || !d) continue;
+    if (!!d.front !== !!front) continue;            // face-framing locks draw later
+    for (let pass = 0; pass < 2; pass++) {          // ink outline, then the colour
+      for (let i = 1; i < h.length; i++) {
+        const t = (i - 1) / Math.max(1, h.length - 2);
+        const w = d.w0 + (d.w1 - d.w0) * t;
+        ctx.strokeStyle = pass === 0 ? INK : d.color;
+        ctx.lineWidth = pass === 0 ? w + 1.8 : w;
+        ctx.beginPath();
+        ctx.moveTo(h[i - 1].x, h[i - 1].y);
+        ctx.lineTo(h[i].x, h[i].y);
+        ctx.stroke();
+      }
+    }
+  }
+}
+
+/* ---- the character ---- */
+// Katana: curved blade, long wrapped tsuka, oval tsuba, no crossguard.
+// Standalone so the blade in her hand and the one tumbling across the grass
+// after she dies are drawn by exactly the same code.
+function drawKatana(hand, ang, len, sw) {
+  const fx = Math.cos(ang), fy = Math.sin(ang);     // along the blade
+  const nx = -Math.sin(ang), ny = Math.cos(ang);    // across it
+  // sori: a katana's edge sits on the CONVEX side, so the blade must bow toward
+  // the direction of the cut (+n), not away from it. Bowing the other way draws
+  // a reverse blade, with the edge on the inside of the curve.
+  const curve = len * 0.11;
+  ctx.lineCap = "round";
+
+  // tsuka, extending back through the fist
+  ctx.strokeStyle = sw.wrap; ctx.lineWidth = 3.4;
+  ctx.beginPath();
+  ctx.moveTo(hand.x - fx * sw.grip, hand.y - fy * sw.grip);
+  ctx.lineTo(hand.x + fx * 1.5, hand.y + fy * 1.5);
+  ctx.stroke();
+  ctx.strokeStyle = sw.hilt; ctx.lineWidth = 0.9;   // wrap bindings
+  for (let i = 1; i <= 3; i++) {
+    const t = -sw.grip + (sw.grip / 3.4) * i;
+    ctx.beginPath();
+    ctx.moveTo(hand.x + fx * t + nx * 1.7, hand.y + fy * t + ny * 1.7);
+    ctx.lineTo(hand.x + fx * t - nx * 1.7, hand.y + fy * t - ny * 1.7);
+    ctx.stroke();
+  }
+  ctx.fillStyle = sw.hilt;                          // tsuba
+  ctx.beginPath();
+  ctx.ellipse(hand.x + fx * 2.6, hand.y + fy * 2.6, 1.5, 4.3, ang, 0, 6.2832);
+  ctx.fill();
+
+  const base = { x: hand.x + fx * 4.5, y: hand.y + fy * 4.5 };
+  const tip  = { x: hand.x + fx * len, y: hand.y + fy * len };
+  const ctrl = { x: (base.x + tip.x) / 2 + nx * curve,
+                 y: (base.y + tip.y) / 2 + ny * curve };
+  const bladeCurve = () => {
+    ctx.beginPath();
+    ctx.moveTo(base.x, base.y);
+    ctx.quadraticCurveTo(ctrl.x, ctrl.y, tip.x, tip.y);
+    ctx.stroke();
+  };
+  if (sw.glow) {                                    // the awakened blade burns
+    // Charged blades breathe. At Lvl 3 the halo pops brightly when the beam is
+    // ready and dims while it recharges, so the glow is a readable state, not decor.
+    let amp = 0.28, width = 8;
+    if (sw.beam) {
+      const ready = S.beamCd <= 0;
+      const pulse = 0.5 + 0.5 * Math.sin(S.t * (ready ? 7.5 : 3.0));
+      amp = ready ? 0.30 + 0.32 * pulse : 0.10 + 0.06 * pulse;
+      width = ready ? 10 + 5 * pulse : 8;
+      if (ready) {                                  // soft outer flare
+        ctx.strokeStyle = "rgba(" + sw.trail + "," + (0.12 * pulse).toFixed(3) + ")";
+        ctx.lineWidth = width + 10;
+        bladeCurve();
+      }
+    }
+    ctx.strokeStyle = "rgba(" + sw.trail + "," + amp.toFixed(3) + ")";
+    ctx.lineWidth = width;
+    bladeCurve();
+  }
+  ctx.strokeStyle = INK; ctx.lineWidth = 5;         // outline, or steel on a blue
+  bladeCurve();                                     // sky reads as barely there
+  ctx.strokeStyle = sw.blade; ctx.lineWidth = 3.2;
+  bladeCurve();
+  ctx.strokeStyle = sw.edge; ctx.lineWidth = 1;     // hamon along the cutting edge
+  ctx.beginPath();
+  ctx.moveTo(base.x + nx * 1.1, base.y + ny * 1.1);
+  ctx.quadraticCurveTo(ctrl.x + nx * 1.1, ctrl.y + ny * 1.1, tip.x, tip.y);
+  ctx.stroke();
+}
+
+
+// A straight, double-edged blade with a crossguard and pommel: the Link family.
+// Same signature as drawKatana so either can be dropped into the same call.
+function drawStraight(hand, ang, len, sw) {
+  const fx = Math.cos(ang), fy = Math.sin(ang);
+  const nx = -Math.sin(ang), ny = Math.cos(ang);
+  const grip = sw.grip;
+  ctx.lineCap = "round";
+
+  // grip and pommel behind the hand
+  ctx.strokeStyle = sw.wrap; ctx.lineWidth = 3.4;
+  ctx.beginPath();
+  ctx.moveTo(hand.x - fx * grip, hand.y - fy * grip);
+  ctx.lineTo(hand.x + fx * 2, hand.y + fy * 2);
+  ctx.stroke();
+  ctx.fillStyle = sw.hilt;
+  ctx.beginPath();
+  ctx.arc(hand.x - fx * (grip + 1), hand.y - fy * (grip + 1), 2.2, 0, 6.2832);
+  ctx.fill();
+
+  // crossguard, swept forward like the Master Sword's wings
+  ctx.strokeStyle = INK; ctx.lineWidth = 5.2;
+  ctx.beginPath();
+  ctx.moveTo(hand.x + fx * 3 - nx * 6, hand.y + fy * 3 - ny * 6);
+  ctx.quadraticCurveTo(hand.x + fx * 4.5, hand.y + fy * 4.5,
+                       hand.x + fx * 3 + nx * 6, hand.y + fy * 3 + ny * 6);
+  ctx.stroke();
+  ctx.strokeStyle = sw.hilt; ctx.lineWidth = 3.4;
+  ctx.beginPath();
+  ctx.moveTo(hand.x + fx * 3 - nx * 6, hand.y + fy * 3 - ny * 6);
+  ctx.quadraticCurveTo(hand.x + fx * 4.5, hand.y + fy * 4.5,
+                       hand.x + fx * 3 + nx * 6, hand.y + fy * 3 + ny * 6);
+  ctx.stroke();
+  if (sw.gem) {                                // the stone set into the wings
+    const gx = hand.x + fx * 4.6, gy = hand.y + fy * 4.6;
+    ctx.fillStyle = sw.gem;
+    ctx.beginPath();
+    ctx.moveTo(gx + fx * 2.2, gy + fy * 2.2);
+    ctx.lineTo(gx + nx * 1.7, gy + ny * 1.7);
+    ctx.lineTo(gx - fx * 2.2, gy - fy * 2.2);
+    ctx.lineTo(gx - nx * 1.7, gy - ny * 1.7);
+    ctx.closePath(); ctx.fill();
+  }
+
+  const base = { x: hand.x + fx * 5, y: hand.y + fy * 5 };
+  const tip  = { x: hand.x + fx * len, y: hand.y + fy * len };
+  const shoulder = 0.86;                       // where the taper to the point starts
+  const sx = base.x + (tip.x - base.x) * shoulder, sy = base.y + (tip.y - base.y) * shoulder;
+  const halfW = 2.4;
+  const blade = (w, style) => {
+    ctx.beginPath();
+    ctx.moveTo(base.x - nx * w, base.y - ny * w);
+    ctx.lineTo(sx - nx * w, sy - ny * w);
+    ctx.lineTo(tip.x, tip.y);
+    ctx.lineTo(sx + nx * w, sy + ny * w);
+    ctx.lineTo(base.x + nx * w, base.y + ny * w);
+    ctx.closePath();
+    ctx.fillStyle = style; ctx.fill();
+  };
+  if (sw.glow) {
+    let amp = 0.26, grow = 3.4;
+    if (sw.beam) {
+      const ready = S.beamCd <= 0;
+      const pulse = 0.5 + 0.5 * Math.sin(S.t * (ready ? 7.5 : 3.0));
+      amp = ready ? 0.30 + 0.32 * pulse : 0.10 + 0.06 * pulse;
+      grow = ready ? 4.5 + 2.5 * pulse : 3.4;
+    }
+    blade(halfW + grow, "rgba(" + sw.trail + "," + amp.toFixed(3) + ")");
+  }
+  blade(halfW + 1.2, INK);
+  blade(halfW, sw.blade);
+  ctx.strokeStyle = sw.edge; ctx.lineWidth = 1;      // fuller down the centre
+  ctx.beginPath();
+  ctx.moveTo(base.x + fx * 1.5, base.y + fy * 1.5);
+  ctx.lineTo(sx, sy);
+  ctx.stroke();
+}
+
+// dispatch on the skin so held and dropped blades always match
+function drawSword(hand, ang, len, sw) {
+  if (SK().swordStyle === "straight") drawStraight(hand, ang, len, sw);
+  else drawKatana(hand, ang, len, sw);
+}
+
+
+// Hair and headwear are static SHAPES in head-local coordinates: [forward, up],
+// where forward is the direction she faces and up runs along the spine. They
+// rotate with the head automatically. Physics is reserved for things that should
+// actually swing, like a ponytail or a cap tail; a bob and a fringe should not.
+function headShape(k, pts, fill, lw) {
+  const P = pts.map(([f, u]) => ({
+    x: k.head.x + k.perp.x * f + k.spine.x * u,
+    y: k.head.y + k.perp.y * f + k.spine.y * u
+  }));
+  const mid = (a, b) => ({ x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 });
+  const m0 = mid(P[P.length - 1], P[0]);
+  ctx.beginPath();
+  ctx.moveTo(m0.x, m0.y);
+  for (let i = 0; i < P.length; i++) {
+    const a = P[i], b = P[(i + 1) % P.length], m = mid(a, b);
+    ctx.quadraticCurveTo(a.x, a.y, m.x, m.y);
+  }
+  ctx.closePath();
+  ctx.strokeStyle = INK; ctx.lineWidth = lw === undefined ? 1.8 : lw;
+  ctx.lineJoin = "round"; ctx.stroke();
+  ctx.fillStyle = fill; ctx.fill();
+}
+
+function drawCharacter() {
+  const s = skeleton();
+  const { pose, L, hip, spine, perp, sh, head } = s;
+  const LW = SK().limb;                 // limb thickness, heavier on Link
+
+  drawHair(false);
+
+  // far leg and far arm first, in shadow tones, so depth reads
+  let k = seg(hip.x, hip.y, pose.hipF + L, 8, 5 * LW, ART.skinDark);
+  let f = seg(k.x, k.y, pose.hipF - pose.kneeF + L, 8, 4.5 * LW,
+              SK().shin === "boot" ? ART.bootDark : ART.skinDark);
+  boot(f, pose.hipF - pose.kneeF + L, true);
+  let e = seg(sh.x, sh.y, pose.armF + L, 7, 4.2 * LW, ART.sleeveDark);
+  seg(e.x, e.y, pose.armF + pose.elbF + L, 6.5, 3.4 * LW, ART.skinDark);
+
+  // near leg
+  k = seg(hip.x, hip.y, pose.hipN + L, 8, 5.4 * LW, ART.skin);
+  f = seg(k.x, k.y, pose.hipN - pose.kneeN + L, 8, 4.8 * LW,
+          SK().shin === "boot" ? ART.boot : ART.skin);
+  boot(f, pose.hipN - pose.kneeN + L, false);
+
+  // Tunic: a shaped silhouette rather than a trapezoid. Half-widths are sampled
+  // down the spine, separately front and back, so she reads as a figure in side
+  // view: bust forward high, waist cinched, seat back low, hem flared.
+  const FRONT = SK().front, BACK = SK().back;
+  const HEM = FRONT[FRONT.length - 1][0];        // skins hang their hem differently
+  const tp = (t, w, sgn) => ({
+    x: sh.x + (hip.x - sh.x) * t + perp.x * sgn * w,
+    y: sh.y + (hip.y - sh.y) * t + perp.y * sgn * w
+  });
+  const ribbon = pts => {                       // smooth closed path through pts
+    const mid = (a, b) => ({ x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 });
+    const m0 = mid(pts[pts.length - 1], pts[0]);
+    ctx.beginPath();
+    ctx.moveTo(m0.x, m0.y);
+    for (let i = 0; i < pts.length; i++) {
+      const a = pts[i], b = pts[(i + 1) % pts.length], m = mid(a, b);
+      ctx.quadraticCurveTo(a.x, a.y, m.x, m.y);
+    }
+    ctx.closePath();
+  };
+
+  const body = FRONT.map(([t, w]) => tp(t, w, 1))
+    .concat(BACK.slice().reverse().map(([t, w]) => tp(t, w, -1)));
+  ribbon(body);
+  ctx.strokeStyle = INK; ctx.lineWidth = 2.4; ctx.lineJoin = "round"; ctx.stroke();
+  ctx.fillStyle = ART.tunic; ctx.fill();
+
+  ribbon(BACK.map(([t, w]) => tp(t, w, -1))     // shaded back half
+    .concat(BACK.slice().reverse().map(([t]) => tp(t, 0, 1))));
+  ctx.fillStyle = ART.tunicDark; ctx.fill();
+
+  ctx.strokeStyle = ART.tunicHem; ctx.lineWidth = 2;
+  ctx.beginPath();
+  ctx.moveTo(tp(HEM, BACK[BACK.length-1][1], -1).x, tp(HEM, BACK[BACK.length-1][1], -1).y);
+  ctx.lineTo(tp(HEM, FRONT[FRONT.length-1][1], 1).x, tp(HEM, FRONT[FRONT.length-1][1], 1).y);
+  ctx.stroke();
+
+  ctx.strokeStyle = ART.belt; ctx.lineWidth = 2.6;   // belt sits on the cinch
+  ctx.beginPath();
+  ctx.moveTo(tp(0.62, 5.2, -1).x, tp(0.62, 5.2, -1).y);
+  ctx.lineTo(tp(0.62, 4.8, 1).x, tp(0.62, 4.8, 1).y);
+  ctx.stroke();
+
+  // head, hair cap, face
+  // head. Skins differ here more than anywhere else: hair silhouette, headwear,
+  // and either an eye or a blindfold.
+  const SKN = SK();
+  const HA = SKN.headArt || {};
+
+  // Draw order matters more than the shapes here, and getting it wrong is what
+  // made this head unreadable: BACK hair, head, MID hair (over the face but under
+  // the features), then the visor or eye, then FRONT hair and the ear on top.
+  if (HA.back) for (const p of HA.back) headShape(s, p.pts, p.fill);
+
+  if (SKN.oneHead) {
+    // One plain circle for the face, with hair laid over it. No ink disc behind
+    // it: that is only needed for the two-circle head, and here it just leaked
+    // dark crescents out around the edges.
+    const fo = SKN.faceOff || [0, 0], fr = SKN.faceR || 6.5;
+    const fx = head.x + perp.x * fo[0] + spine.x * fo[1];
+    const fy = head.y + perp.y * fo[0] + spine.y * fo[1];
+    ctx.fillStyle = ART.skin;
+    ctx.beginPath(); ctx.arc(fx, fy, fr, 0, 6.2832); ctx.fill();
+    // Outline the LOWER arc only. The jaw is a real silhouette edge; the crown is
+    // under hair. Ringing the whole circle drew a dark band across the top of her
+    // head that read exactly like a hairband.
+    const crown = Math.atan2(spine.y, spine.x);
+    ctx.strokeStyle = INK; ctx.lineWidth = 1.8;
+    ctx.beginPath();
+    ctx.arc(fx, fy, fr, crown + 1.25, crown + 6.2832 - 1.25);
+    ctx.stroke();
+  } else {
+    ctx.fillStyle = INK;
+    ctx.beginPath(); ctx.arc(head.x - perp.x * 0.8, head.y - perp.y * 0.8, 7.4, 0, 6.2832); ctx.fill();
+    ctx.fillStyle = SKN.skull || ART.hair;
+    ctx.beginPath(); ctx.arc(head.x - perp.x * 0.8, head.y - perp.y * 0.8, 6.3, 0, 6.2832); ctx.fill();
+    ctx.fillStyle = ART.skin;
+    ctx.beginPath(); ctx.arc(head.x + perp.x * 1.6, head.y + perp.y * 1.6 + 0.4, 5.1, 0, 6.2832); ctx.fill();
+  }
+
+  if (HA.mid) for (const p of HA.mid) headShape(s, p.pts, p.fill);
+
+  if (SKN.face === "blindfold") {                      // visor: wide at the back,
+    headShape(s, SKN.visor, "#101015", 1.4);           // tapering to a point at the nose
+  } else {
+    ctx.fillStyle = "#241a18";                         // eye
+    ctx.beginPath();
+    ctx.arc(head.x + perp.x * 3.9 + spine.x * 0.1, head.y + perp.y * 3.9 + spine.y * 0.1,
+            1.3, 0, 6.2832);
+    ctx.fill();
+    ctx.strokeStyle = "rgba(36,26,24,0.55)";           // brow
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    ctx.moveTo(head.x + perp.x * 2.6 + spine.x * 2.1, head.y + perp.y * 2.6 + spine.y * 2.1);
+    ctx.lineTo(head.x + perp.x * 5.0 + spine.x * 1.7, head.y + perp.y * 5.0 + spine.y * 1.7);
+    ctx.stroke();
+  }
+
+  if (HA.front) for (const p of HA.front) headShape(s, p.pts, p.fill);
+  if (SKN.ear) headShape(s, [[1.6, 1.8], [-3.6, 0.4], [1.2, -2.6]], ART.skin, 1.3);
+  if (SKN.band) {                                      // hairband over the crown
+    const up = Math.atan2(spine.y, spine.x);
+    const bo = SKN.band.off || [-0.8, 0];
+    ctx.strokeStyle = SKN.band.color;
+    ctx.lineWidth = SKN.band.w;
+    ctx.beginPath();
+    ctx.arc(head.x + perp.x * bo[0] + spine.x * bo[1],
+            head.y + perp.y * bo[0] + spine.y * bo[1], SKN.band.r,
+            up - SKN.band.span, up + SKN.band.span);
+    ctx.stroke();
+  }
+  drawHair(true);                                      // locks that fall over the face
+
+  // near arm: during a swing it reaches for the sword pivot instead of posing
+  let hand;
+  if (s.swordAng !== null) {
+    const pv = slashPivot();
+    hand = { x: pv.x, y: pv.y };
+    const mx = (sh.x + hand.x) / 2 + perp.x * 2.5, my = (sh.y + hand.y) / 2 + perp.y * 2.5;
+    ctx.strokeStyle = ART.sleeve; ctx.lineWidth = 4.4; ctx.lineCap = "round";
+    ctx.beginPath(); ctx.moveTo(sh.x, sh.y); ctx.lineTo(mx, my); ctx.stroke();
+    ctx.strokeStyle = ART.skin; ctx.lineWidth = 3.6;
+    ctx.beginPath(); ctx.moveTo(mx, my); ctx.lineTo(hand.x, hand.y); ctx.stroke();
+  } else {
+    e = seg(sh.x, sh.y, pose.armN + L, 7, 4.4 * LW, ART.sleeve);
+    hand = seg(e.x, e.y, pose.armN + pose.elbN + L, 6.5, 3.6 * LW, ART.skin);
+  }
+
+  if (!S.death) {
+    const sw = sword();
+    const held = s.swordAng !== null;
+    drawSword(hand, held ? s.swordAng : 2.45, held ? sw.reach : sw.reach * 0.72, sw);
+  }
+}
+
+/* ============================================================
+   ENEMY PAINTERS — silhouette first: armored things are angular and
+   cold, cuttable things are round and warm.
+   ============================================================ */
+function paintBarrier(o) {
+  const { x, y, w, h } = o;
+  ctx.fillStyle = INK; ctx.fillRect(x - 1, y + 6, w + 2, h - 6);
+  ctx.fillStyle = "#2f3542"; ctx.fillRect(x, y + 7, w, h - 7);
+  ctx.fillStyle = "#5c6579"; ctx.fillRect(x + 2, y + 7, w - 4, h - 7);
+  ctx.fillStyle = "#8892a6"; ctx.fillRect(x + 2, y + 7, 3.5, h - 7);
+  ctx.fillStyle = "#242a36";
+  ctx.fillRect(x, y + 17, w, 3); ctx.fillRect(x, y + 31, w, 3);
+  ctx.fillStyle = "#9aa4b8";
+  for (let i = 0; i < 3; i++) {
+    const sx = x + 1.5 + i * 6.8;
+    ctx.beginPath();
+    ctx.moveTo(sx, y + 8); ctx.lineTo(sx + 3.2, y); ctx.lineTo(sx + 6.4, y + 8);
+    ctx.closePath();
+    ctx.strokeStyle = INK; ctx.lineWidth = 1.6; ctx.lineJoin = "round"; ctx.stroke();
+    ctx.fill();
+  }
+}
+function paintBrute(o) {
+  const wob = Math.sin(S.t * 9 + o.x * 0.05) * 0.9;
+  const cx = o.x + o.w / 2, cy = o.y + o.h / 2 + wob;
+  ctx.fillStyle = "#b04a3c";                             // feet
+  ctx.fillRect(o.x + 4, o.y + o.h - 3, 6, 3);
+  ctx.fillRect(o.x + o.w - 10, o.y + o.h - 3, 6, 3);
+  ctx.fillStyle = INK;                                   // outline ring
+  ctx.beginPath(); ctx.ellipse(cx, cy, o.w / 2 + 1.2, o.h / 2 + 0.2, 0, 0, 6.2832); ctx.fill();
+  ctx.fillStyle = C.soft;                                // round, soft body
+  ctx.beginPath(); ctx.ellipse(cx, cy, o.w / 2, o.h / 2 - 1, 0, 0, 6.2832); ctx.fill();
+  ctx.fillStyle = "#b04a3c";
+  ctx.beginPath(); ctx.ellipse(cx, cy + 4, o.w / 2 - 2, o.h / 4, 0, 0, 6.2832); ctx.fill();
+  ctx.fillStyle = "#ffeedd";                             // eyes, facing the player
+  ctx.beginPath(); ctx.arc(cx + 3, cy - 2, 3.2, 0, 6.2832); ctx.fill();
+  ctx.beginPath(); ctx.arc(cx - 4, cy - 2, 2.6, 0, 6.2832); ctx.fill();
+  ctx.fillStyle = "#2a1a18";
+  ctx.beginPath(); ctx.arc(cx + 4, cy - 2, 1.5, 0, 6.2832); ctx.fill();
+  ctx.beginPath(); ctx.arc(cx - 3.4, cy - 2, 1.2, 0, 6.2832); ctx.fill();
+}
+function paintFlyer(o) {
+  const flap = Math.sin(S.t * 17 + o.x * 0.1);
+  const bob = Math.sin(S.t * 5 + o.x * 0.03) * 1.5;
+  const cx = o.x + o.w / 2, cy = o.y + o.h / 2 + bob;
+  ctx.fillStyle = "#b04a3c";                             // wings
+  for (const dir of [-1, 1]) {
+    ctx.beginPath();
+    ctx.moveTo(cx, cy - 1);
+    ctx.lineTo(cx + dir * 15, cy - 6 - flap * 6);
+    ctx.lineTo(cx + dir * 11, cy + 4 - flap * 2);
+    ctx.closePath();
+    ctx.strokeStyle = INK; ctx.lineWidth = 2; ctx.lineJoin = "round"; ctx.stroke();
+    ctx.fill();
+  }
+  ctx.fillStyle = INK;
+  ctx.beginPath(); ctx.ellipse(cx, cy, 9.2, 8.2, 0, 0, 6.2832); ctx.fill();
+  ctx.fillStyle = C.soft;
+  ctx.beginPath(); ctx.ellipse(cx, cy, 8, 7, 0, 0, 6.2832); ctx.fill();
+  ctx.fillStyle = "#ffeedd";
+  ctx.beginPath(); ctx.arc(cx + 3, cy - 1, 3.4, 0, 6.2832); ctx.fill();
+  ctx.fillStyle = "#2a1a18";
+  ctx.beginPath(); ctx.arc(cx + 4.2, cy - 1, 1.6, 0, 6.2832); ctx.fill();
+}
+function paintLantern(o) {
+  const pulse = 0.72 + Math.sin(S.t * 4 + o.x * 0.05) * 0.28;
+  const cx = o.x + o.w / 2, cy = o.y + o.h / 2;
+  ctx.globalAlpha = 0.16 * pulse;                        // halo
+  ctx.fillStyle = C.blade;
+  ctx.beginPath(); ctx.arc(cx, cy, 17, 0, 6.2832); ctx.fill();
+  ctx.globalAlpha = 1;
+  ctx.fillStyle = INK;
+  ctx.fillRect(cx - 6, o.y - 1, 12, o.h + 2);            // frame
+  ctx.fillStyle = ART.hilt;
+  ctx.fillRect(cx - 5, o.y, 10, 3);                      // cap
+  ctx.fillRect(cx - 5, o.y + o.h - 3, 10, 3);            // base
+  ctx.fillStyle = C.blade;
+  ctx.fillRect(cx - 4, o.y + 3, 8, o.h - 6);             // glass
+  ctx.fillStyle = ART.bladeHi;
+  ctx.globalAlpha = pulse;
+  ctx.fillRect(cx - 2, o.y + 5, 4, o.h - 10);            // flame
+  ctx.globalAlpha = 1;
+}
+
+const PAINTERS = { barrier: paintBarrier, brute: paintBrute,
+                   flyer: paintFlyer, lantern: paintLantern };
+
+/* ============================================================
+   ENEMY SETS — a skin can swap the look of any enemy without touching its box.
+   Hitboxes, spawn rules and slashability all stay in CONFIG and OB.
+   ============================================================ */
+
+// Machine lifeform palette. Light grey so it reads as metal, and light enough to
+// stay clear of the dark barrier the player has to jump.
+const MACH = { body: "#c5cbd1", head: "#d2d7dc", eye: "#f2867a" };
+
+// Two small lit eyes. The light red sits close to the grey in luminance, so it is
+// the ink ring that makes them read. That ring is also the floor on how small
+// these can go: below about 2 units the outline swallows the fill entirely.
+function machineEyes(cx, cy, spread) {
+  for (const dx of [-spread, spread]) {
+    ctx.beginPath(); ctx.arc(cx + dx, cy, 2.0, 0, 6.2832);
+    ctx.strokeStyle = INK; ctx.lineWidth = 1.0; ctx.stroke();
+    ctx.fillStyle = MACH.eye; ctx.fill();
+  }
+}
+
+function machineRoundRect(x, y, w, h, r) {
+  ctx.beginPath();
+  ctx.moveTo(x + r, y);
+  ctx.lineTo(x + w - r, y);
+  ctx.quadraticCurveTo(x + w, y, x + w, y + r);
+  ctx.lineTo(x + w, y + h - r);
+  ctx.quadraticCurveTo(x + w, y + h, x + w - r, y + h);
+  ctx.lineTo(x + r, y + h);
+  ctx.quadraticCurveTo(x, y + h, x, y + h - r);
+  ctx.lineTo(x, y + r);
+  ctx.quadraticCurveTo(x, y, x + r, y);
+  ctx.closePath();
+}
+
+// The flyer: a machine that hovers on a slab. No wings, so it only drifts.
+function paintMachineFlyer(o) {
+  const bob = Math.sin(S.t * 2.0 + o.x * 0.04) * 1.7;
+  const top = o.y + bob;
+  ctx.lineJoin = "round";
+
+  machineRoundRect(o.x + 7, top + 2, 18, 17, 7);      // body behind the head
+  ctx.strokeStyle = INK; ctx.lineWidth = 2; ctx.stroke();
+  ctx.fillStyle = MACH.body; ctx.fill();
+
+  const hx = o.x + 11.5, hy = top + 9.5;              // head
+  ctx.beginPath(); ctx.arc(hx, hy, 7.5, 0, 6.2832);
+  ctx.strokeStyle = INK; ctx.lineWidth = 2; ctx.stroke();
+  ctx.fillStyle = MACH.head; ctx.fill();
+  machineEyes(hx, hy + 1.0, 3.0);
+
+  machineRoundRect(o.x + 1, top + 17, 28, 8, 3);      // hover slab
+  ctx.strokeStyle = INK; ctx.lineWidth = 2; ctx.stroke();
+  ctx.fillStyle = MACH.body; ctx.fill();
+  ctx.save(); ctx.clip();
+  ctx.fillStyle = "rgba(24,28,34,0.18)";
+  ctx.fillRect(o.x + 1, top + 21, 28, 4);
+  ctx.restore();
+}
+
+// 2B's ground enemy: a machine lifeform. Circular head with two lit eyes, and a
+// capsule body with a flat bottom. Kept light grey against the dark angular
+// barrier, and the eyes stay red, because red is the game's "this one can be cut"
+// signal and a grey blob would read as armour.
+function paintMachineBrute(o) {
+  const bob = Math.sin(S.t * 7 + o.x * 0.05) * 1.0;
+  const L = o.x + 4, R = o.x + o.w - 2, B = o.y + o.h;
+  const cx = (L + R) / 2, r = (R - L) / 2, T = o.y + o.h - 13 + bob;
+
+  ctx.beginPath();                                    // capsule, flat bottom
+  ctx.moveTo(L, B);
+  ctx.lineTo(L, T);
+  ctx.arc(cx, T, r, Math.PI, 0);
+  ctx.lineTo(R, B);
+  ctx.closePath();
+  ctx.strokeStyle = INK; ctx.lineWidth = 2; ctx.lineJoin = "round"; ctx.stroke();
+  ctx.fillStyle = MACH.body; ctx.fill();
+  ctx.save();                                         // shaded underside
+  ctx.clip();
+  ctx.fillStyle = "rgba(24,28,34,0.20)";
+  ctx.fillRect(L, B - 8, R - L, 8);
+  ctx.restore();
+
+  const hx = o.x + 10, hy = o.y + 8.5 + bob;          // head
+  ctx.beginPath(); ctx.arc(hx, hy, 8, 0, 6.2832);
+  ctx.strokeStyle = INK; ctx.lineWidth = 2; ctx.stroke();
+  ctx.fillStyle = MACH.head; ctx.fill();
+
+  machineEyes(hx, hy + 1.2, 3.2);
+}
+
+const ENEMY_SETS = {
+  machine: { brute: paintMachineBrute, flyer: paintMachineFlyer }
+};
+function painterFor(type) {
+  const set = ENEMY_SETS[SK().enemySet];
+  return (set && set[type]) || PAINTERS[type];
+}
+
+
+/* ============================================================
+   RENDER
+   ============================================================ */
+function render() {
+  const W = CONFIG.width, H = CONFIG.height, G = CONFIG.groundY;
+
+  ctx.setTransform(1, 0, 0, 1, 0, 0);
+  ctx.fillStyle = C.sky1;
+  ctx.fillRect(0, 0, W, H);
+
+  // shake in whole buffer pixels, so it never blurs the grid.
+  // note: no ctx.clip() here on purpose. clip() intersects rather than
+  // replaces, so re-clipping every frame slowly shrank the visible area.
+  const sx = Math.round((Math.random() - 0.5) * S.shake);
+  const sy = Math.round((Math.random() - 0.5) * S.shake);
+  ctx.setTransform(1, 0, 0, 1, sx, sy);
+
+  const grad = ctx.createLinearGradient(0, 0, 0, G);
+  grad.addColorStop(0, C.sky0); grad.addColorStop(1, C.sky1);
+  ctx.fillStyle = grad; ctx.fillRect(0, 0, W, G);
+
+  // parallax silhouettes
+  ctx.fillStyle = C.far;
+  for (let i = 0; i < 7; i++) {
+    const w = 150, x = ((i * 190 - S.distance * 0.18) % (W + 340)) - 170;
+    ctx.beginPath();
+    ctx.moveTo(x, G); ctx.lineTo(x + w / 2, G - 92 - (i % 3) * 26); ctx.lineTo(x + w, G);
+    ctx.fill();
+  }
+  ctx.fillStyle = C.near;
+  for (let i = 0; i < 9; i++) {
+    const x = ((i * 130 - S.distance * 0.42) % (W + 260)) - 130;
+    ctx.fillRect(x, G - 30 - (i % 4) * 9, 74, 40);
+  }
+
+  ctx.fillStyle = C.ground; ctx.fillRect(0, G, W, H - G);
+  ctx.strokeStyle = C.line; ctx.lineWidth = 2;
+  ctx.beginPath(); ctx.moveTo(0, G + 1); ctx.lineTo(W, G + 1); ctx.stroke();
+  ctx.strokeStyle = C.turf;
+  for (let i = 0; i < 22; i++) {
+    const x = ((i * 44 - S.distance) % (W + 88)) - 44;
+    ctx.beginPath(); ctx.moveTo(x, G + 16); ctx.lineTo(x + 22, G + 16); ctx.stroke();
+  }
+
+  for (const o of S.obstacles) {
+    if (o.type === "lantern") {                       // chain, drawn behind
+      ctx.strokeStyle = "rgba(255,209,102,0.28)"; ctx.lineWidth = 1;
+      ctx.beginPath();
+      ctx.moveTo(o.x + o.w / 2, 0); ctx.lineTo(o.x + o.w / 2, o.y); ctx.stroke();
+    }
+    if (SPRITES[o.type]) ctx.drawImage(SPRITES[o.type], o.x, o.y, o.w, o.h);
+    else painterFor(o.type)(o);
+  }
+
+  // beams, drawn behind the character so she stays the clearest thing on screen
+  for (const b of S.beams) {
+    const fade = 1 - b.age / CONFIG.beam.life;
+    const cx = b.x + b.w / 2, cy = b.y + b.h / 2;
+    const sw = sword();
+    ctx.save();
+    ctx.globalAlpha = Math.max(0, fade);
+    ctx.strokeStyle = "rgba(" + sw.trail + ",0.22)";
+    ctx.lineWidth = b.w + 12; ctx.lineCap = "round";
+    ctx.beginPath();
+    ctx.moveTo(cx, b.y + 3);
+    ctx.quadraticCurveTo(cx + 13, cy, cx, b.y + b.h - 3);
+    ctx.stroke();
+    ctx.strokeStyle = sw.blade; ctx.lineWidth = b.w * 0.42;
+    ctx.beginPath();
+    ctx.moveTo(cx, b.y + 3);
+    ctx.quadraticCurveTo(cx + 13, cy, cx, b.y + b.h - 3);
+    ctx.stroke();
+    ctx.strokeStyle = sw.edge; ctx.lineWidth = 1.6;
+    ctx.beginPath();
+    ctx.moveTo(cx + 2, b.y + 6);
+    ctx.quadraticCurveTo(cx + 14, cy, cx + 2, b.y + b.h - 6);
+    ctx.stroke();
+    ctx.restore();
+  }
+
+  if (S.dropped) {
+    const k = S.dropped;
+    drawSword({ x: k.x, y: k.y }, k.ang, k.len, sword());
+  }
+
+  // player. if a sprite sheet is ever loaded it overrides the rig entirely.
+  const p = S.player;
+  const attacking = p.atkT >= 0;
+  const key = attacking && SPRITES.playerAttack ? "playerAttack" : "player";
+  if (SPRITES[key]) {
+    const fr = CONFIG.frame;
+    ctx.drawImage(SPRITES[key], CONFIG.player.x - fr.ax, p.y - fr.ay, fr.w, fr.h);
+  } else {
+    // the sweep trail goes behind her, the rig draws the blade itself
+    if (attacking) {
+      const a = CONFIG.attack, pv = slashPivot();
+      if (p.atkT >= a.windup && p.atkT < a.windup + a.active) {
+        const u = (p.atkT - a.windup) / a.active;
+        ctx.strokeStyle = "rgba(" + sword().trail + ",0.30)";
+        ctx.lineWidth = sword().glow ? 12 : 9; ctx.lineCap = "round";
+        ctx.beginPath();
+        ctx.arc(pv.x, pv.y, pv.r, pv.a0, pv.a0 + (pv.a1 - pv.a0) * u);
+        ctx.stroke();
+      }
+    }
+    drawCharacter();
+  }
+
+  for (const pt of S.particles) {
+    ctx.globalAlpha = Math.max(0, 1 - pt.age / pt.life);
+    ctx.fillStyle = pt.color;
+    ctx.fillRect(pt.x, pt.y, pt.s, pt.s);
+  }
+  ctx.globalAlpha = 1;
+
+  ctx.setTransform(1, 0, 0, 1, 0, 0);   // HUD never shakes
+  drawHud();
+
+  dctx.fillStyle = C.sky1;
+  dctx.fillRect(0, 0, canvas.width, canvas.height);
+  dctx.drawImage(buffer, view.ox, view.oy,
+                 CONFIG.width * view.scale, CONFIG.height * view.scale);
+}
+
+// a small katana badge that mirrors the equipped blade, so the HUD and the
+// weapon in her hand can never disagree
+function drawSwordBadge(x, y) {
+  const sw = sword();
+  const a = -0.62, fx = Math.cos(a), fy = Math.sin(a);
+  const nx = -Math.sin(a), ny = Math.cos(a);
+  const len = 17 + S.swordLvl * 5;
+  ctx.lineCap = "round";
+  ctx.strokeStyle = sw.wrap; ctx.lineWidth = 3;
+  ctx.beginPath();
+  ctx.moveTo(x, y); ctx.lineTo(x + fx * 6, y + fy * 6); ctx.stroke();
+
+  const b = { x: x + fx * 9, y: y + fy * 9 };
+  const t = { x: x + fx * len, y: y + fy * len };
+
+  if (SK().swordStyle === "straight") {
+    // crossguard across the blade, not a katana's oval tsuba
+    ctx.strokeStyle = sw.hilt; ctx.lineWidth = 2.4;
+    ctx.beginPath();
+    ctx.moveTo(x + fx * 7.5 - nx * 4.2, y + fy * 7.5 - ny * 4.2);
+    ctx.lineTo(x + fx * 7.5 + nx * 4.2, y + fy * 7.5 + ny * 4.2);
+    ctx.stroke();
+    if (sw.gem) {
+      ctx.fillStyle = sw.gem;
+      ctx.beginPath();
+      ctx.arc(x + fx * 7.8, y + fy * 7.8, 1.5, 0, 6.2832);
+      ctx.fill();
+    }
+    const straight = w => {
+      ctx.beginPath();
+      ctx.moveTo(b.x - nx * w, b.y - ny * w);
+      ctx.lineTo(b.x + fx * (len - 12) - nx * w, b.y + fy * (len - 12) - ny * w);
+      ctx.lineTo(t.x, t.y);
+      ctx.lineTo(b.x + fx * (len - 12) + nx * w, b.y + fy * (len - 12) + ny * w);
+      ctx.lineTo(b.x + nx * w, b.y + ny * w);
+      ctx.closePath();
+      ctx.fill();
+    };
+    if (sw.glow) { ctx.fillStyle = "rgba(" + sw.trail + ",0.30)"; straight(4.2); }
+    ctx.fillStyle = sw.blade; straight(1.9);
+    ctx.strokeStyle = sw.edge; ctx.lineWidth = 0.8;   // fuller
+    ctx.beginPath();
+    ctx.moveTo(b.x + fx * 1.5, b.y + fy * 1.5);
+    ctx.lineTo(b.x + fx * (len - 12), b.y + fy * (len - 12));
+    ctx.stroke();
+  } else {
+    ctx.fillStyle = sw.hilt;
+    ctx.beginPath();
+    ctx.ellipse(x + fx * 7, y + fy * 7, 1.3, 3.4, a, 0, 6.2832); ctx.fill();
+    const c = { x: (b.x + t.x) / 2 - nx * len * 0.11, y: (b.y + t.y) / 2 - ny * len * 0.11 };
+    if (sw.glow) {
+      ctx.strokeStyle = "rgba(" + sw.trail + ",0.30)"; ctx.lineWidth = 6.5;
+      ctx.beginPath(); ctx.moveTo(b.x, b.y); ctx.quadraticCurveTo(c.x, c.y, t.x, t.y); ctx.stroke();
+    }
+    ctx.strokeStyle = sw.blade; ctx.lineWidth = 2.6;
+    ctx.beginPath(); ctx.moveTo(b.x, b.y); ctx.quadraticCurveTo(c.x, c.y, t.x, t.y); ctx.stroke();
+    // the icon is shown edge-up, so the edge line goes on the convex side too
+    ctx.strokeStyle = sw.edge; ctx.lineWidth = 0.9;
+    ctx.beginPath();
+    ctx.moveTo(b.x - nx * 1, b.y - ny * 1);
+    ctx.quadraticCurveTo(c.x - nx * 1, c.y - ny * 1, t.x, t.y);
+    ctx.stroke();
+  }
+
+  ctx.textAlign = "left";
+  ctx.fillStyle = sw.glow ? sw.blade : C.text;
+  ctx.font = "700 12px ui-monospace, monospace";
+  ctx.fillText("Lvl " + sw.lvl, x + 26, y - 3);
+
+  // progress pips toward the next level, hidden once fully upgraded
+  if (S.swordLvl < CONFIG.swords.length - 1) {
+    for (let i = 0; i < sword().toNext; i++) {
+      ctx.beginPath();
+      ctx.arc(x + 29 + i * 7, y + 5, 2.4, 0, 6.2832);
+      ctx.fillStyle = i < S.lanterns ? C.blade : "rgba(124,135,152,0.45)";
+      ctx.fill();
+    }
+  } else {
+    ctx.fillStyle = C.dim;
+    ctx.font = "600 8px ui-monospace, monospace";
+    ctx.fillText("AWAKENED", x + 26, y + 8);
+  }
+
+  // beam cooldown, directly under the level. only exists once the blade is true.
+  if (sw.beam) {
+    const bw = 62, bh = 5, bx = x - 2, by = y + 16;
+    const ready = S.beamCd <= 0;
+    const fill = ready ? 1 : 1 - S.beamCd / CONFIG.beam.cooldown;
+    ctx.fillStyle = "rgba(11,20,14,0.45)";
+    ctx.fillRect(bx - 1, by - 1, bw + 2, bh + 2);
+    if (ready) {
+      const pulse = 0.5 + 0.5 * Math.sin(S.t * 7.5);
+      ctx.globalAlpha = 0.35 + 0.4 * pulse;          // breathes in step with the blade
+      ctx.fillStyle = sw.blade;
+      ctx.fillRect(bx - 3, by - 3, bw + 6, bh + 6);
+      ctx.globalAlpha = 1;
+    }
+    ctx.fillStyle = ready ? sw.edge : sw.blade;
+    ctx.fillRect(bx, by, bw * fill, bh);
+    ctx.fillStyle = ready ? sw.blade : C.dim;
+    ctx.font = "600 8px ui-monospace, monospace";
+    ctx.fillText(ready ? "BEAM READY" : "CHARGING", bx, by + 15);
+  }
+}
+
+function drawSpeaker(x, y, on) {
+  ctx.fillStyle = C.text;
+  ctx.beginPath();                                   // cone
+  ctx.moveTo(x - 6, y - 2.5); ctx.lineTo(x - 3, y - 2.5); ctx.lineTo(x, y - 6);
+  ctx.lineTo(x, y + 6); ctx.lineTo(x - 3, y + 2.5); ctx.lineTo(x - 6, y + 2.5);
+  ctx.closePath(); ctx.fill();
+  ctx.strokeStyle = C.text; ctx.lineWidth = 1.4; ctx.lineCap = "round";
+  if (on) {
+    for (const r of [3.5, 6]) {
+      ctx.beginPath(); ctx.arc(x + 1, y, r, -0.85, 0.85); ctx.stroke();
+    }
+  } else {
+    ctx.beginPath();
+    ctx.moveTo(x + 3, y - 4); ctx.lineTo(x + 9, y + 4);
+    ctx.moveTo(x + 9, y - 4); ctx.lineTo(x + 3, y + 4);
+    ctx.stroke();
+  }
+}
+
+function drawHud() {
+  const W = CONFIG.width, H = CONFIG.height;
+  UI.buttons.length = 0;
+  ctx.textAlign = "left";
+  ctx.fillStyle = C.text;
+  ctx.font = "700 26px ui-monospace, monospace";
+  ctx.fillText(String(Math.floor(S.score)).padStart(5, "0"), 18, 38);
+
+  ctx.font = "600 11px ui-monospace, monospace";
+  ctx.fillStyle = C.dim;
+  ctx.fillText("BEST " + String(S.best).padStart(5, "0"), 18, 56);
+
+  drawSwordBadge(20, 78);
+
+  if (S.levelFlash > 0) {
+    const sw = sword();
+    const k = Math.min(1, S.levelFlash / 1.6);
+    ctx.globalAlpha = Math.min(1, k * 1.8);
+    ctx.textAlign = "center";
+    ctx.fillStyle = sw.blade;
+    ctx.font = "700 22px ui-monospace, monospace";
+    ctx.fillText(sw.name, W / 2, 120);
+    ctx.fillStyle = C.dim;
+    ctx.font = "600 11px ui-monospace, monospace";
+    ctx.fillText("LONGER REACH", W / 2, 138);
+    ctx.globalAlpha = 1;
+    ctx.textAlign = "left";
+  }
+
+  if (S.mult > 1) {
+    ctx.textAlign = "right";
+    ctx.fillStyle = C.blade;
+    ctx.font = "700 24px ui-monospace, monospace";
+    // sits below the pause button, which occupies y 16..40 on the right
+    ctx.fillText("x" + S.mult, W - 18, 66);
+    ctx.fillStyle = C.dim;
+    ctx.font = "600 10px ui-monospace, monospace";
+    ctx.fillText("KEEP SLASHING", W - 18, 82);
+    ctx.textAlign = "left";
+  }
+
+  if (S.phase === "ready") {
+    ctx.fillStyle = "rgba(14,17,22,0.72)";
+    ctx.fillRect(0, 0, W, H);
+    ctx.textAlign = "center";
+    ctx.fillStyle = C.text;
+    ctx.font = "700 30px ui-monospace, monospace";
+    ctx.fillText("SWORD RUNNER", W / 2, 52);
+    ctx.fillStyle = C.dim;
+    ctx.font = "600 12px ui-monospace, monospace";
+    ctx.fillText("Left side or Space to jump.  Right side or X to slash.", W / 2, 76);
+    ctx.fillText("Grey is armoured, so jump it. Red can be cut, and cutting builds your multiplier.", W / 2, 94);
+    ctx.fillText("Gold lanterns hang at jump height. Cut them mid-air to awaken your blade.", W / 2, 112);
+    ctx.fillStyle = C.text;
+    ctx.font = "700 12px ui-monospace, monospace";
+    ctx.fillText("CHOOSE A CHARACTER", W / 2, 146);
+    ctx.textAlign = "left";
+    skinPicker(158);
+    ctx.textAlign = "center";
+    ctx.fillStyle = C.blade;
+    ctx.font = "700 13px ui-monospace, monospace";
+    ctx.fillText("Tap anywhere else to start", W / 2, 232);
+    ctx.textAlign = "left";
+  }
+
+  // speaker toggle, always available; pause button only while running
+  button(W - 80, 16, 28, 24, "", () => { musicArm(); musicToggleMute(); }, { size: 12 });
+  drawSpeaker(W - 80 + 14, 28, !MUSIC.muted && !musicMissing());
+  if (musicMissing()) {
+    ctx.textAlign = "right";
+    ctx.fillStyle = C.dim;
+    ctx.font = "600 8px ui-monospace, monospace";
+    ctx.fillText("no music file", W - 88, 31);
+    ctx.textAlign = "left";
+  }
+  if (S.phase === "play" && !paused) {
+    button(W - 44, 16, 28, 24, "II", togglePause, { size: 13 });
+  }
+
+  if (paused) {
+    ctx.fillStyle = "rgba(14,17,22,0.78)";
+    ctx.fillRect(0, 0, W, H);
+    ctx.textAlign = "center";
+    ctx.fillStyle = C.text;
+    ctx.font = "700 30px ui-monospace, monospace";
+    ctx.fillText("PAUSED", W / 2, 58);
+    ctx.fillStyle = C.dim;
+    ctx.font = "600 11px ui-monospace, monospace";
+    ctx.fillText("Score " + Math.floor(S.score) + "    Best " + S.best, W / 2, 78);
+    ctx.textAlign = "left";
+    button(W / 2 - 150, 96, 140, 34, "RESUME", startCountdown);
+    button(W / 2 + 10, 96, 140, 34, "RESTART", restartNow);
+    ctx.textAlign = "center";
+    ctx.fillStyle = C.text;
+    ctx.font = "700 12px ui-monospace, monospace";
+    ctx.fillText("CHARACTER", W / 2, 156);
+    ctx.textAlign = "left";
+    skinPicker(168);
+  }
+
+  if (resumeIn > 0 && S.phase === "play") {
+    const n = Math.ceil(resumeIn);
+    const frac = 1 - (Math.ceil(resumeIn) - resumeIn);   // 1 -> 0 across each second
+    ctx.textAlign = "center";
+    ctx.globalAlpha = 0.30 + 0.45 * frac;
+    ctx.fillStyle = C.text;
+    ctx.font = "700 " + (54 + 22 * frac) + "px ui-monospace, monospace";
+    ctx.fillText(String(n), W / 2, H / 2 + 6);
+    ctx.globalAlpha = 1;
+    ctx.fillStyle = C.text;
+    ctx.font = "700 13px ui-monospace, monospace";
+    ctx.fillText("GET READY", W / 2, H / 2 + 34);
+    ctx.textAlign = "left";
+  }
+
+  if (S.phase === "dead") panel([
+    ["RUN ENDED", 30, C.text],
+    ["Score " + Math.floor(S.score) + "    Best " + S.best, 15, C.dim],
+    [S.deadTimer >= CONFIG.restartLock ? "Tap or press R to run again" : " ", 13, C.blade]
+  ], (S.deadTimer - 0.75) / 0.5);
+}
+
+function panel(lines, fade) {
+  const W = CONFIG.width, H = CONFIG.height;
+  const a = fade === undefined ? 1 : Math.max(0, Math.min(1, fade));
+  if (a <= 0) return;
+  ctx.globalAlpha = a;
+  ctx.fillStyle = "rgba(14,17,22,0.72)";
+  ctx.fillRect(0, 0, W, H);
+  ctx.textAlign = "center";
+  let y = H / 2 - (lines.length - 1) * 15 - 8;
+  for (const [text, size, color] of lines) {
+    ctx.fillStyle = color;
+    ctx.font = (size > 20 ? "700 " : "600 ") + size + "px ui-monospace, monospace";
+    ctx.fillText(text, W / 2, y);
+    y += size > 20 ? 34 : 24;
+  }
+  ctx.globalAlpha = 1;
+  ctx.textAlign = "left";
+}
+
+/* ============================================================
+   LOOP — fixed timestep so 60Hz and 120Hz devices play identically
+   ============================================================ */
+const STEP = 1 / 120;
+let acc = 0, last = performance.now();
+function frame(now) {
+  let dt = (now - last) / 1000;
+  last = now;
+  if (dt > 0.25) dt = 0.25;            // tab was backgrounded
+  if (paused) acc = 0;
+  else if (resumeIn > 0) { resumeIn = Math.max(0, resumeIn - dt); acc = 0; }
+  else acc += dt;
+  let guard = 0;
+  while (acc >= STEP && guard++ < 240) { update(STEP); acc -= STEP; }
+  musicUpdate(dt);
+  render();
+  requestAnimationFrame(frame);
+}
+requestAnimationFrame(frame);
+</script>
+</body>
+</html>
