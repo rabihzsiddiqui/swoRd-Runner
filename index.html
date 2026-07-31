@@ -271,6 +271,9 @@ const SKINS = [
   {
     id: "link", name: "THE HERO",
     music: ["music/link.mp3", "link.mp3", "./music/link.mp3"],
+    // the first 7s is an intro, heard once; every loop after that repeats
+    // just the 8s-53s span instead of restarting from 0
+    musicLoop: { start: 8, end: 53 },
     swatch: ["#3f9c4a", "#8a5a2b", "#f2c9a0"],
     limb: 1.14, swordStyle: "straight",
     art: { skin:"#f2c9a0", skinDark:"#c98f66", hair:"#9c5a30", hairHi:"#c07d45",
@@ -468,7 +471,7 @@ function musicPlayer(skin) {
   let p = MUSIC.players[skin.id];
   if (!p) {
     p = { id: skin.id, paths: skin.music || [], idx: 0, audio: null,
-          dead: !(skin.music && skin.music.length) };
+          dead: !(skin.music && skin.music.length), loop: skin.musicLoop || null };
     MUSIC.players[skin.id] = p;
   }
   return p;
@@ -478,9 +481,24 @@ function musicOpen(p) {
   if (p.dead) return null;
   if (p.audio) return p.audio;
   const a = new Audio(p.paths[p.idx]);
-  a.loop = true;
   a.preload = "auto";
   a.volume = 0;
+  if (p.loop) {
+    // The intro (everything before loop.start) plays once, the first time
+    // the track runs start to finish. Every loop after that repeats only
+    // loop.start..loop.end, so the intro is never heard again.
+    a.loop = false;
+    a.addEventListener("timeupdate", () => {
+      if (a.currentTime >= p.loop.end) a.currentTime = p.loop.start;
+    });
+    a.addEventListener("ended", () => {
+      a.currentTime = p.loop.start;
+      const pr = a.play();
+      if (pr && pr.catch) pr.catch(() => {});
+    });
+  } else {
+    a.loop = true;
+  }
   a.addEventListener("error", () => {
     p.audio = null;
     p.idx++;
