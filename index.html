@@ -284,7 +284,7 @@ const SKINS = [
     // masculine: deeper chest, almost no cinch, no seat projection
     front: [[0,5.8],[0.20,6.4],[0.45,6.0],[0.62,5.4],[0.85,5.4],[1.0,5.6],[1.45,7.4]],
     back:  [[0,6.2],[0.20,6.2],[0.45,6.0],[0.62,5.6],[0.85,5.8],[1.0,6.0],[1.45,8.0]],
-    shin: null, face: "eye", ear: true, oneHead: true,
+    shin: null, face: "eye", ear: true, oneHead: true, enemySet: "keese",
     // Rebuilt from the reference sketch. Four shapes, nothing else: a round head,
     // a green cap wedge over the back of it, one lock hanging in front of the ear,
     // one bang sweeping forward. Earlier versions had eight overlapping pieces
@@ -1764,8 +1764,51 @@ function paintMachineBrute(o) {
   machineEyes(hx, hy + 1.2, 3.2);
 }
 
+// Link's flyer: a Keese. One glowing eye with a vertical slit pupil dead
+// center of the face is the whole identity here, so unlike every other
+// enemy in the game it does not get a two-eyed face at all.
+const KEESE = { body: "#332a3d", wing: "#241d2c", eye: "#ffd94a" };
+function paintKeese(o) {
+  const flap = Math.sin(S.t * 15 + o.x * 0.1);
+  const bob = Math.sin(S.t * 5 + o.x * 0.03) * 1.5;
+  const cx = o.x + o.w / 2, cy = o.y + o.h / 2 + bob;
+
+  ctx.fillStyle = KEESE.wing;                             // membranous, scalloped
+  ctx.strokeStyle = INK; ctx.lineWidth = 1.6; ctx.lineJoin = "round";
+  for (const dir of [-1, 1]) {
+    ctx.beginPath();
+    ctx.moveTo(cx + dir * 2, cy - 2);
+    ctx.quadraticCurveTo(cx + dir * 10, cy - 10 - flap * 6, cx + dir * 16, cy - 3 - flap * 4);
+    ctx.quadraticCurveTo(cx + dir * 11, cy + 2 - flap, cx + dir * 9, cy + 6 - flap * 2);
+    ctx.quadraticCurveTo(cx + dir * 5, cy + 2, cx + dir * 2, cy + 3);
+    ctx.closePath();
+    ctx.fill(); ctx.stroke();
+  }
+
+  ctx.fillStyle = INK;                                    // outline ring
+  ctx.beginPath(); ctx.ellipse(cx, cy, 8.2, 7.2, 0, 0, 6.2832); ctx.fill();
+  ctx.fillStyle = KEESE.body;
+  ctx.beginPath(); ctx.ellipse(cx, cy, 7, 6, 0, 0, 6.2832); ctx.fill();
+
+  ctx.fillStyle = KEESE.body;                             // ears
+  for (const dir of [-1, 1]) {
+    ctx.beginPath();
+    ctx.moveTo(cx + dir * 3, cy - 5);
+    ctx.lineTo(cx + dir * 5.5, cy - 11);
+    ctx.lineTo(cx + dir * 1.5, cy - 6);
+    ctx.closePath();
+    ctx.fill();
+  }
+
+  ctx.fillStyle = KEESE.eye;                              // one eye, not two
+  ctx.beginPath(); ctx.arc(cx, cy - 0.5, 3.2, 0, 6.2832); ctx.fill();
+  ctx.fillStyle = INK;                                    // vertical slit pupil
+  ctx.beginPath(); ctx.ellipse(cx, cy - 0.5, 0.9, 2.6, 0, 0, 6.2832); ctx.fill();
+}
+
 const ENEMY_SETS = {
-  machine: { brute: paintMachineBrute, flyer: paintMachineFlyer }
+  machine: { brute: paintMachineBrute, flyer: paintMachineFlyer },
+  keese: { flyer: paintKeese }
 };
 function painterFor(type) {
   const set = ENEMY_SETS[SK().enemySet];
