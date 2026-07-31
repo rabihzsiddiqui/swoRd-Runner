@@ -42,14 +42,14 @@
   }
   .touch-btn {
     position: absolute;
-    bottom: max(20px, env(safe-area-inset-bottom));
-    width: clamp(72px, 18vmin, 100px);
-    height: clamp(72px, 18vmin, 100px);
+    bottom: max(22px, env(safe-area-inset-bottom));
+    width: clamp(92px, 26vmin, 150px);
+    height: clamp(92px, 26vmin, 150px);
     border-radius: 50%;
     background: rgba(12,26,18,0.66);
-    border: 1.5px solid rgba(240,248,251,0.55);
+    border: 2px solid rgba(240,248,251,0.55);
     color: #f4f8fb;
-    font: 700 13px ui-monospace, monospace;
+    font: 700 16px ui-monospace, monospace;
     letter-spacing: 0.04em;
     display: flex;
     align-items: center;
@@ -61,8 +61,8 @@
     -webkit-tap-highlight-color: transparent;
     transition: background-color 0.08s ease, border-color 0.08s ease, transform 0.08s ease;
   }
-  .touch-btn.jump { left: max(20px, env(safe-area-inset-left)); }
-  .touch-btn.attack { right: max(20px, env(safe-area-inset-right)); }
+  .touch-btn.jump { left: max(22px, env(safe-area-inset-left)); }
+  .touch-btn.attack { right: max(22px, env(safe-area-inset-right)); }
   .touch-btn.pressed {
     background: rgba(255,255,255,0.92);
     border-color: #ffffff;
@@ -1871,8 +1871,19 @@ function render() {
   ctx.setTransform(1, 0, 0, 1, 0, 0);   // HUD never shakes
   drawHud();
 
-  dctx.fillStyle = C.sky1;
-  dctx.fillRect(0, 0, canvas.width, canvas.height);
+  // Outside the fixed 800x360 buffer the device rarely shares its aspect
+  // ratio (portrait phones especially), so the letterbox bars extend the
+  // sky and the grass to the real screen edges instead of showing a flat,
+  // mismatched color. The split sits at the actual ground line, so it stays
+  // seamless with the buffer drawn on top of it.
+  const groundScreenY = view.oy + CONFIG.groundY * view.scale;
+  const skyGrad = dctx.createLinearGradient(0, view.oy, 0, groundScreenY);
+  skyGrad.addColorStop(0, C.sky0);
+  skyGrad.addColorStop(1, C.sky1);
+  dctx.fillStyle = skyGrad;
+  dctx.fillRect(0, 0, canvas.width, groundScreenY);
+  dctx.fillStyle = C.ground;
+  dctx.fillRect(0, groundScreenY, canvas.width, canvas.height - groundScreenY);
   dctx.drawImage(buffer, view.ox, view.oy,
                  CONFIG.width * view.scale, CONFIG.height * view.scale);
 }
