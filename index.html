@@ -258,7 +258,7 @@ const SKINS = [
     // same feminine profile, but the dress falls to the knee
     front: [[0,5.0],[0.20,7.0],[0.45,5.4],[0.62,4.4],[0.85,6.4],[1.0,7.2],[1.75,10.5]],
     back:  [[0,5.4],[0.20,5.4],[0.45,5.0],[0.62,4.8],[0.85,7.4],[1.0,8.0],[1.75,11.0]],
-    shin: "boot", enemySet: "machine",  // tall boots swallow the whole lower leg
+    shin: "boot", enemySet: "machine", companion: "pod",  // tall boots swallow the whole lower leg
     face: "blindfold", oneHead: true, faceOff: [0.8, -2.4], faceR: 6.2,
     // arcs around the face, well inside the hair, so a clear band of hair sits
     // above it. Measured off the sketch: face is 0.43 of the hair's width.
@@ -358,7 +358,7 @@ function applySkin(i) {
   localStorage.setItem("swordRunnerSkin", String(i));
   Object.assign(ART, SKINS[i].art);
   Object.assign(BG, DEFAULT_BG, SKINS[i].bg || {});
-  if (typeof S !== "undefined" && S) initStrands();
+  if (typeof S !== "undefined" && S) { initStrands(); initCompanion(); }
 }
 
 function initStrands() {
@@ -371,6 +371,12 @@ function initStrands() {
       const x = x0 - i * d.seg, y = y0;
       return { x, y, px: x, py: y };
     }));
+}
+
+// Same idea as initStrands: pinned to a plausible anchor before the pose
+// tables exist, so it doesn't fly in from the origin on the first frame.
+function initCompanion() {
+  S.companion = { x: CONFIG.player.x - 4, y: CONFIG.groundY - CONFIG.player.h - 10, vx: 0, vy: 0 };
 }
 
 const INK = "#16241c";   // one dark outline colour, used on everything readable
@@ -440,6 +446,7 @@ function reset() {
     runPhase: 0,
     landT: 0,
     strands: [],
+    companion: null,  // a floating pod, for skins that set companion:"pod"
 
     obstacles: [],
     particles: [],
@@ -450,6 +457,7 @@ function reset() {
     lastKill: ""              // floating label
   };
   initStrands();
+  initCompanion();
 }
 reset();
 
@@ -792,6 +800,7 @@ function update(dt) {
   if (S.death) updateDeath(dt);
   if (S.dropped) updateDropped(dt);
   updateHair(dt);
+  updateCompanion(dt);
 
   S.shake = Math.max(0, S.shake - dt * 42);
   S.levelFlash = Math.max(0, S.levelFlash - dt);
@@ -1266,6 +1275,25 @@ function updateHair(dt) {
     }
   }
 }
+
+// A hovering companion for skins with no hair to carry that lagging, alive
+// motion. Not a verlet chain like the strands above - it's one rigid body,
+// not a rope - but the same idea: it chases a target anchored to her
+// shoulder through a spring rather than snapping straight to it, so it
+// trails and overshoots a little on every jump and landing.
+function updateCompanion(dt) {
+  const c = S.companion;
+  if (SK().companion !== "pod" || !c) return;
+  const k = skeleton();
+  const tx = k.head.x - k.perp.x * 24 + k.spine.x * 12;
+  const ty = k.head.y - k.perp.y * 24 + k.spine.y * 12 + Math.sin(S.t * 2.2) * 3;
+  const stiff = 90, damp = 12;
+  const ax = (tx - c.x) * stiff - c.vx * damp;
+  const ay = (ty - c.y) * stiff - c.vy * damp;
+  c.vx += ax * dt; c.vy += ay * dt;
+  c.x += c.vx * dt; c.y += c.vy * dt;
+}
+
 function drawHair(front) {
   const defs = SK().strands;
   ctx.lineCap = "round";
@@ -1725,28 +1753,141 @@ function paintFlyer(o) {
   ctx.fillStyle = "#2a1a18";
   ctx.beginPath(); ctx.arc(cx + 4.2, cy - 1, 1.6, 0, 6.2832); ctx.fill();
 }
-function paintLantern(o) {
-  const pulse = 0.72 + Math.sin(S.t * 4 + o.x * 0.05) * 0.28;
-  const cx = o.x + o.w / 2, cy = o.y + o.h / 2;
-  ctx.globalAlpha = 0.16 * pulse;                        // halo
+// The default air-only pickup: a cluster of pulsing fireflies rather than a
+// hung lantern, since the outdoor skins have nothing overhead to hang one
+// from. Same box, same harmless/slashable rules - only the art changed.
+// Sized up from the first pass, which read as barely a speck against sky.
+function paintFirefly(o) {
+  const bob = Math.sin(S.t * 2.4 + o.x * 0.08) * 2;
+  const pulse = 0.65 + Math.sin(S.t * 4 + o.x * 0.05) * 0.35;
+  const cx = o.x + o.w / 2, cy = o.y + o.h / 2 + bob;
+  ctx.globalAlpha = 0.28 * pulse;                         // halo
   ctx.fillStyle = C.blade;
-  ctx.beginPath(); ctx.arc(cx, cy, 17, 0, 6.2832); ctx.fill();
+  ctx.beginPath(); ctx.arc(cx, cy, 19, 0, 6.2832); ctx.fill();
   ctx.globalAlpha = 1;
-  ctx.fillStyle = INK;
-  ctx.fillRect(cx - 6, o.y - 1, 12, o.h + 2);            // frame
-  ctx.fillStyle = ART.hilt;
-  ctx.fillRect(cx - 5, o.y, 10, 3);                      // cap
-  ctx.fillRect(cx - 5, o.y + o.h - 3, 10, 3);            // base
+  ctx.fillStyle = C.blade;                                // the lead firefly
+  ctx.beginPath(); ctx.arc(cx, cy, 5.2 * pulse, 0, 6.2832); ctx.fill();
+  ctx.fillStyle = "#fff7d6";
+  ctx.beginPath(); ctx.arc(cx - 1.4, cy - 1.4, 2 * pulse, 0, 6.2832); ctx.fill();
+  for (const s of [-1, 1]) {                              // two drifting companions
+    const sx = cx + s * (11 + Math.sin(S.t * 1.6 + o.x * 0.1 + s) * 4);
+    const sy = cy + Math.cos(S.t * 2.1 + o.x * 0.15 + s) * 8;
+    const sp = 0.5 + Math.sin(S.t * 5 + o.x * 0.2 + s * 2) * 0.5;
+    ctx.globalAlpha = 0.7 * sp;
+    ctx.fillStyle = C.blade;
+    ctx.beginPath(); ctx.arc(sx, sy, 2.3, 0, 6.2832); ctx.fill();
+  }
+  ctx.globalAlpha = 1;
+}
+
+// Gunmetal, closer to 9S's Pod than 2B's own - these are the anonymous
+// Support Pods scattered through the level, not her personal one, so they
+// deliberately read as a different, darker unit.
+const POD = { body: "#2c2f34", hi: "#40444b" };
+// 2B's own companion pod: light, matching her own white/silver palette
+// instead of the level pickups, so the one that's actually hers never
+// gets mistaken for one of them.
+const POD_LIGHT = { body: "#e4e8ec", hi: "#ffffff" };
+
+// A support Pod: a tall rectangular body on two thin bent arms, with the
+// light mounted off-center on a stalk at the top corner rather than
+// centered like an eye - that asymmetry plus the right-angled body is what
+// reads as hardware instead of a creature. Shared by 2B's air-only pickup
+// and her companion (see updateCompanion/render); only the palette differs.
+function paintPod(o, palette) {
+  const pal = palette || POD;
+  const bob = Math.sin(S.t * 2.2 + o.x * 0.04) * 2;
+  const pulse = 0.6 + Math.sin(S.t * 4 + o.x * 0.05) * 0.4;
+  const cx = o.x + o.w / 2, cy = o.y + o.h / 2 + bob;
+  const bw = 11, bh = 20, bx = cx - bw / 2, by = cy - bh / 2 + 2;
+
+  ctx.strokeStyle = INK; ctx.lineWidth = 1.6;             // bent arms, drawn first
+  ctx.lineCap = "round"; ctx.lineJoin = "round";
+  for (const s of [-1, 1]) {
+    ctx.beginPath();
+    ctx.moveTo(cx + s * 3, by + bh - 1);
+    ctx.lineTo(cx + s * 7, by + bh + 4);
+    ctx.lineTo(cx + s * 9, by + bh + 9);
+    ctx.stroke();
+  }
+
+  ctx.fillStyle = INK;                                    // tall rectangular body
+  ctx.fillRect(bx - 1, by - 1, bw + 2, bh + 2);
+  ctx.fillStyle = pal.body;
+  ctx.fillRect(bx, by, bw, bh);
+  ctx.strokeStyle = "rgba(0,0,0,0.3)"; ctx.lineWidth = bw * 0.4;
+  ctx.beginPath();                                        // panel shading, half the face
+  ctx.moveTo(bx + bw * 0.75, by); ctx.lineTo(bx + bw * 0.75, by + bh);
+  ctx.stroke();
+  ctx.strokeStyle = pal.hi; ctx.lineWidth = 1.4;          // a lit edge for dimension
+  ctx.beginPath();
+  ctx.moveTo(bx + 1.4, by + 1); ctx.lineTo(bx + 1.4, by + bh - 1);
+  ctx.stroke();
+
+  const lx = bx + bw - 2, ly = by - 4;                    // light, off-center on a stalk
+  ctx.strokeStyle = pal.body; ctx.lineWidth = 1.4;
+  ctx.beginPath(); ctx.moveTo(lx, by); ctx.lineTo(lx, ly); ctx.stroke();
+  ctx.globalAlpha = 0.28 * pulse;
   ctx.fillStyle = C.blade;
-  ctx.fillRect(cx - 4, o.y + 3, 8, o.h - 6);             // glass
-  ctx.fillStyle = ART.bladeHi;
+  ctx.beginPath(); ctx.arc(lx, ly, 7, 0, 6.2832); ctx.fill();
+  ctx.globalAlpha = 1;
+  ctx.fillStyle = C.blade;
+  ctx.beginPath(); ctx.arc(lx, ly, 2.6 * pulse, 0, 6.2832); ctx.fill();
+  ctx.strokeStyle = INK; ctx.lineWidth = 1; ctx.stroke();
+}
+
+// Link's air-only pickup: a fairy carrying a little clay pot underneath
+// her, glowing softly. Two pairs of wings (a big top pair, a small bottom
+// pair) framing a bright orb, the pot hanging below like she's lugging it.
+const FAIRY = { glow: "#eaf4ff", core: "#dcefff", wingLight: "#c7d3ef",
+                wingDark: "#aab6da", pot: "#6b4423", potDark: "#4a2f18",
+                potBand: "#f0ece1" };
+function paintFairy(o) {
+  const bob = Math.sin(S.t * 2.6 + o.x * 0.07) * 2.4;
+  const pulse = 0.6 + Math.sin(S.t * 4 + o.x * 0.05) * 0.4;
+  const cx = o.x + o.w / 2, cy = o.y + o.h / 2 + bob - 3;
+
+  ctx.globalAlpha = 0.24 * pulse;                         // glow, behind everything
+  ctx.fillStyle = FAIRY.glow;
+  ctx.beginPath(); ctx.arc(cx, cy + 3, 16, 0, 6.2832); ctx.fill();
+  ctx.globalAlpha = 1;
+
+  const py = cy + 9;                                      // the pot, hanging below
+  ctx.strokeStyle = INK; ctx.lineWidth = 1.4; ctx.lineJoin = "round";
+  ctx.beginPath(); ctx.ellipse(cx, py + 5, 4.4, 5, 0, 0, 6.2832); ctx.stroke();
+  ctx.fillStyle = FAIRY.pot; ctx.fill();
+  ctx.fillStyle = FAIRY.potDark;
+  ctx.beginPath(); ctx.ellipse(cx, py + 8, 4.2, 2.4, 0, 0, 6.2832); ctx.fill();
+  ctx.strokeStyle = FAIRY.potBand; ctx.lineWidth = 1;     // a wavy band, not a plain ring
+  ctx.beginPath();
+  ctx.moveTo(cx - 3.4, py + 3.5); ctx.lineTo(cx - 1.2, py + 2.2);
+  ctx.lineTo(cx + 1.2, py + 3.5); ctx.lineTo(cx + 3.4, py + 2.2);
+  ctx.stroke();
+  ctx.fillStyle = INK;                                    // dark mouth opening
+  ctx.beginPath(); ctx.ellipse(cx, py, 3, 1.3, 0, 0, 6.2832); ctx.fill();
+
+  ctx.strokeStyle = INK; ctx.lineWidth = 1;               // wings, behind the orb
+  for (const s of [-1, 1]) {
+    ctx.fillStyle = FAIRY.wingLight;
+    ctx.beginPath(); ctx.ellipse(cx + s * 6, cy - 3, 5.4, 3.6, s * 0.5, 0, 6.2832);
+    ctx.fill(); ctx.stroke();
+    ctx.fillStyle = FAIRY.wingDark;
+    ctx.beginPath(); ctx.ellipse(cx + s * 4.4, cy + 2.2, 3.2, 2.2, s * 0.4, 0, 6.2832);
+    ctx.fill(); ctx.stroke();
+  }
+
+  ctx.fillStyle = INK;                                    // the fairy herself: one orb
+  ctx.beginPath(); ctx.arc(cx, cy, 4.6, 0, 6.2832); ctx.fill();
+  ctx.fillStyle = FAIRY.core;
+  ctx.beginPath(); ctx.arc(cx, cy, 3.8, 0, 6.2832); ctx.fill();
   ctx.globalAlpha = pulse;
-  ctx.fillRect(cx - 2, o.y + 5, 4, o.h - 10);            // flame
+  ctx.fillStyle = "#ffffff";
+  ctx.beginPath(); ctx.arc(cx - 1.2, cy - 1.2, 1.4, 0, 6.2832); ctx.fill();
   ctx.globalAlpha = 1;
 }
 
 const PAINTERS = { barrier: paintBarrier, brute: paintBrute,
-                   flyer: paintFlyer, lantern: paintLantern };
+                   flyer: paintFlyer, lantern: paintFirefly };
 
 /* ============================================================
    ENEMY SETS — a skin can swap the look of any enemy without touching its box.
@@ -1881,8 +2022,8 @@ function paintKeese(o) {
 }
 
 const ENEMY_SETS = {
-  machine: { brute: paintMachineBrute, flyer: paintMachineFlyer },
-  keese: { flyer: paintKeese }
+  machine: { brute: paintMachineBrute, flyer: paintMachineFlyer, lantern: paintPod },
+  keese: { flyer: paintKeese, lantern: paintFairy }
 };
 function painterFor(type) {
   const set = ENEMY_SETS[SK().enemySet];
@@ -2023,11 +2164,6 @@ function render() {
   }
 
   for (const o of S.obstacles) {
-    if (o.type === "lantern") {                       // chain, drawn behind
-      ctx.strokeStyle = "rgba(255,209,102,0.28)"; ctx.lineWidth = 1;
-      ctx.beginPath();
-      ctx.moveTo(o.x + o.w / 2, 0); ctx.lineTo(o.x + o.w / 2, o.y); ctx.stroke();
-    }
     if (SPRITES[o.type]) ctx.drawImage(SPRITES[o.type], o.x, o.y, o.w, o.h);
     else painterFor(o.type)(o);
   }
@@ -2084,6 +2220,15 @@ function render() {
       }
     }
     drawCharacter();
+  }
+
+  // her companion, drawn independently of the rig/sprite branch above so it
+  // shows the same whichever one is active. Reuses paintPod exactly - same
+  // shape code as the airborne pickup, just following her instead of
+  // sitting still.
+  if (SK().companion === "pod" && S.companion) {
+    const c = S.companion;
+    paintPod({ x: c.x - 11, y: c.y - 11, w: 22, h: 22 }, POD_LIGHT);
   }
 
   for (const pt of S.particles) {
