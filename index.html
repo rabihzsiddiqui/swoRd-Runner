@@ -32,10 +32,51 @@
     -webkit-tap-highlight-color: transparent;
   }
   canvas { display: block; width: 100%; height: 100%; }
+
+  /* Touch controls: two large thumb buttons, one per side, matching the
+     existing left=jump / right=attack split. Shown only on touch-primary
+     devices so desktop/mouse play is untouched. */
+  .touch-controls { display: none; position: fixed; inset: 0; pointer-events: none; z-index: 10; }
+  @media (hover: none) and (pointer: coarse) {
+    .touch-controls { display: block; }
+  }
+  .touch-btn {
+    position: absolute;
+    bottom: max(20px, env(safe-area-inset-bottom));
+    width: clamp(72px, 18vmin, 100px);
+    height: clamp(72px, 18vmin, 100px);
+    border-radius: 50%;
+    background: rgba(12,26,18,0.66);
+    border: 1.5px solid rgba(240,248,251,0.55);
+    color: #f4f8fb;
+    font: 700 13px ui-monospace, monospace;
+    letter-spacing: 0.04em;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    pointer-events: auto;
+    touch-action: none;
+    -webkit-user-select: none;
+    user-select: none;
+    -webkit-tap-highlight-color: transparent;
+    transition: background-color 0.08s ease, border-color 0.08s ease, transform 0.08s ease;
+  }
+  .touch-btn.jump { left: max(20px, env(safe-area-inset-left)); }
+  .touch-btn.attack { right: max(20px, env(safe-area-inset-right)); }
+  .touch-btn.pressed {
+    background: rgba(255,255,255,0.92);
+    border-color: #ffffff;
+    color: #12251a;
+    transform: scale(0.90);
+  }
 </style>
 </head>
 <body>
 <canvas id="game"></canvas>
+<div class="touch-controls">
+  <button type="button" id="btnJump" class="touch-btn jump">JUMP</button>
+  <button type="button" id="btnAttack" class="touch-btn attack">SLASH</button>
+</div>
 <script>
 "use strict";
 
@@ -618,6 +659,25 @@ canvas.addEventListener("pointerdown", e => {
   if (paused || resumeIn > 0) return;       // menu and countdown swallow stray taps
   if (e.clientX < window.innerWidth / 2) pressJump(); else pressAttack();
 }, { passive: false });
+
+// Dedicated thumb buttons for touch devices (see .touch-btn CSS). They call
+// the same pressJump/pressAttack as keyboard and tap-anywhere, and are
+// swallowed the same way while the pause menu or countdown is up.
+function bindTouchButton(el, fn) {
+  const press = e => {
+    e.preventDefault();
+    el.classList.add("pressed");
+    if (paused || resumeIn > 0) return;
+    fn();
+  };
+  const release = e => { e.preventDefault(); el.classList.remove("pressed"); };
+  el.addEventListener("pointerdown", press);
+  el.addEventListener("pointerup", release);
+  el.addEventListener("pointercancel", release);
+  el.addEventListener("pointerleave", release);
+}
+bindTouchButton(document.getElementById("btnJump"), pressJump);
+bindTouchButton(document.getElementById("btnAttack"), pressAttack);
 
 /* ============================================================
    HELPERS
