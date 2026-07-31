@@ -340,9 +340,9 @@ const SKINS = [
       { name:"TRAVELER'S SWORD", blade:"#d8dde6", edge:"#ffffff",
         hilt:"#7a5230", wrap:"#5a3a20", trail:"216,221,230" },
       { name:"MASTER SWORD", blade:"#cfe0f0", edge:"#ffffff",
-        hilt:"#4a3f9e", wrap:"#3fbfa8", trail:"160,200,255", gem:"#ffd166" },
+        hilt:"#4a3f9e", wrap:"#2a3b8f", trail:"160,200,255", gem:"#ffd166" },
       { name:"TRUE MASTER SWORD", blade:"#9fd8ff", edge:"#eaf8ff",
-        hilt:"#5b4ecf", wrap:"#4fd8c0", trail:"150,210,255", gem:"#ffd166" }
+        hilt:"#5b4ecf", wrap:"#34449e", trail:"150,210,255", gem:"#ffd166" }
     ]
   }
 ];
@@ -1845,6 +1845,7 @@ const FAIRY = { glow: "#eaf4ff", core: "#dcefff", wingLight: "#c7d3ef",
 function paintFairy(o) {
   const bob = Math.sin(S.t * 2.6 + o.x * 0.07) * 2.4;
   const pulse = 0.6 + Math.sin(S.t * 4 + o.x * 0.05) * 0.4;
+  const flap = Math.sin(S.t * 22 + o.x * 0.15);             // fast wing flutter
   const cx = o.x + o.w / 2, cy = o.y + o.h / 2 + bob - 3;
 
   ctx.globalAlpha = 0.24 * pulse;                         // glow, behind everything
@@ -1868,11 +1869,14 @@ function paintFairy(o) {
 
   ctx.strokeStyle = INK; ctx.lineWidth = 1;               // wings, behind the orb
   for (const s of [-1, 1]) {
+    const spread = 1 - Math.abs(flap) * 0.4;                // foreshortens near the wingbeat's peak
     ctx.fillStyle = FAIRY.wingLight;
-    ctx.beginPath(); ctx.ellipse(cx + s * 6, cy - 3, 5.4, 3.6, s * 0.5, 0, 6.2832);
+    ctx.beginPath();
+    ctx.ellipse(cx + s * 6, cy - 3, 5.4 * spread, 3.6, s * (0.5 + flap * 0.35), 0, 6.2832);
     ctx.fill(); ctx.stroke();
     ctx.fillStyle = FAIRY.wingDark;
-    ctx.beginPath(); ctx.ellipse(cx + s * 4.4, cy + 2.2, 3.2, 2.2, s * 0.4, 0, 6.2832);
+    ctx.beginPath();
+    ctx.ellipse(cx + s * 4.4, cy + 2.2, 3.2 * spread, 2.2, s * (0.4 + flap * 0.3), 0, 6.2832);
     ctx.fill(); ctx.stroke();
   }
 
