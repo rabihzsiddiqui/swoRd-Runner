@@ -2585,20 +2585,72 @@ function updateTouchAttackIcon() {
   const nx = -Math.sin(a), ny = Math.cos(a);
   const cx = w * 0.40, cy = h * 0.66, len = Math.min(w, h) * 0.62;
 
-  ictx.strokeStyle = sw.wrap; ictx.lineWidth = w * 0.09;    // grip
-  ictx.beginPath();
-  ictx.moveTo(cx - fx * len * 0.22, cy - fy * len * 0.22);
-  ictx.lineTo(cx, cy);
-  ictx.stroke();
+  // Level 1 keeps the original plain hilt. Master Sword and True Master
+  // Sword (S.swordLvl 1 and 2) get the iconic winged crossguard, diamond
+  // gem, and criss-crossed grip instead - this is purely an icon
+  // embellishment, the in-game held blade and CONFIG hitboxes are untouched.
+  if (S.swordLvl >= 1) {
+    const pivot = { x: cx + fx * 2.5, y: cy + fy * 2.5 };
+    for (const s of [-1, 1]) {                             // wing crossguard
+      const tip = { x: pivot.x + nx * s * len * 0.30, y: pivot.y + ny * s * len * 0.30 };
+      const c1 = { x: pivot.x + nx * s * len * 0.18 - fx * len * 0.12,
+                   y: pivot.y + ny * s * len * 0.18 - fy * len * 0.12 };
+      const c2 = { x: pivot.x + nx * s * len * 0.14 + fx * len * 0.08,
+                   y: pivot.y + ny * s * len * 0.14 + fy * len * 0.08 };
+      ictx.beginPath();
+      ictx.moveTo(pivot.x, pivot.y);
+      ictx.quadraticCurveTo(c1.x, c1.y, tip.x, tip.y);
+      ictx.quadraticCurveTo(c2.x, c2.y, pivot.x, pivot.y);
+      ictx.closePath();
+      ictx.fillStyle = sw.hilt; ictx.fill();
+      ictx.strokeStyle = INK; ictx.lineWidth = Math.max(1, w * 0.014); ictx.stroke();
+    }
+    const gr = w * 0.05;                                   // diamond gem
+    ictx.beginPath();
+    ictx.moveTo(pivot.x + fx * gr * 1.4, pivot.y + fy * gr * 1.4);
+    ictx.lineTo(pivot.x + nx * gr, pivot.y + ny * gr);
+    ictx.lineTo(pivot.x - fx * gr * 1.4, pivot.y - fy * gr * 1.4);
+    ictx.lineTo(pivot.x - nx * gr, pivot.y - ny * gr);
+    ictx.closePath();
+    ictx.fillStyle = sw.gem || "#ffd166"; ictx.fill();
+    ictx.strokeStyle = INK; ictx.lineWidth = Math.max(1, w * 0.012); ictx.stroke();
 
-  ictx.strokeStyle = sw.hilt; ictx.lineWidth = w * 0.07;    // crossguard
-  ictx.beginPath();
-  ictx.moveTo(cx + fx * 2 - nx * len * 0.17, cy + fy * 2 - ny * len * 0.17);
-  ictx.lineTo(cx + fx * 2 + nx * len * 0.17, cy + fy * 2 + ny * len * 0.17);
-  ictx.stroke();
-  if (sw.gem) {
-    ictx.fillStyle = sw.gem;
-    ictx.beginPath(); ictx.arc(cx + fx * 2.4, cy + fy * 2.4, w * 0.035, 0, 6.2832); ictx.fill();
+    const gripLen = len * 0.26;                            // grip + pommel
+    const g0 = { x: cx, y: cy };
+    const g1 = { x: cx - fx * gripLen, y: cy - fy * gripLen };
+    ictx.strokeStyle = sw.wrap; ictx.lineWidth = w * 0.10; ictx.lineCap = "round";
+    ictx.beginPath(); ictx.moveTo(g0.x, g0.y); ictx.lineTo(g1.x, g1.y); ictx.stroke();
+    ictx.strokeStyle = "#3a56d8"; ictx.lineWidth = Math.max(1, w * 0.02); // criss-crossed wrap
+    for (let i = 0; i < 3; i++) {
+      const t0 = i / 3, t1 = (i + 1) / 3;
+      const p0 = { x: g0.x + (g1.x - g0.x) * t0, y: g0.y + (g1.y - g0.y) * t0 };
+      const mid = { x: g0.x + (g1.x - g0.x) * (t0 + t1) / 2, y: g0.y + (g1.y - g0.y) * (t0 + t1) / 2 };
+      const p1 = { x: g0.x + (g1.x - g0.x) * t1, y: g0.y + (g1.y - g0.y) * t1 };
+      ictx.beginPath();
+      ictx.moveTo(p0.x - nx * w * 0.045, p0.y - ny * w * 0.045);
+      ictx.lineTo(mid.x + nx * w * 0.045, mid.y + ny * w * 0.045);
+      ictx.lineTo(p1.x - nx * w * 0.045, p1.y - ny * w * 0.045);
+      ictx.stroke();
+    }
+    ictx.fillStyle = sw.hilt;
+    ictx.strokeStyle = INK; ictx.lineWidth = Math.max(1, w * 0.012);
+    ictx.beginPath(); ictx.arc(g1.x, g1.y, w * 0.06, 0, 6.2832); ictx.fill(); ictx.stroke();
+  } else {
+    ictx.strokeStyle = sw.wrap; ictx.lineWidth = w * 0.09;  // grip
+    ictx.beginPath();
+    ictx.moveTo(cx - fx * len * 0.22, cy - fy * len * 0.22);
+    ictx.lineTo(cx, cy);
+    ictx.stroke();
+
+    ictx.strokeStyle = sw.hilt; ictx.lineWidth = w * 0.07;  // crossguard
+    ictx.beginPath();
+    ictx.moveTo(cx + fx * 2 - nx * len * 0.17, cy + fy * 2 - ny * len * 0.17);
+    ictx.lineTo(cx + fx * 2 + nx * len * 0.17, cy + fy * 2 + ny * len * 0.17);
+    ictx.stroke();
+    if (sw.gem) {
+      ictx.fillStyle = sw.gem;
+      ictx.beginPath(); ictx.arc(cx + fx * 2.4, cy + fy * 2.4, w * 0.035, 0, 6.2832); ictx.fill();
+    }
   }
 
   const base = { x: cx + fx * 4, y: cy + fy * 4 };
