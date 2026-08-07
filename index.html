@@ -134,18 +134,20 @@
     background: linear-gradient(180deg, #e2dbba 0%, #cec5a0 100%);
     border-color: #3c3928;
     color: #2c2a1d;
+    border-radius: 0;                 /* sharp corners everywhere, no exceptions */
+    font-family: -apple-system, "Segoe UI", "Helvetica Neue", Arial, sans-serif;
+    font-weight: 600;
+    letter-spacing: 0.07em;
   }
   body[data-skin="2b"] .touch-btn {
-    border-radius: 6px;
     width: clamp(118px, 34vmin, 190px);
     height: clamp(78px, 20vmin, 108px);
-    font: 700 16px ui-monospace, monospace;
+    font-size: 17px;
   }
-  body[data-skin="2b"] .touch-mini {
-    border-radius: 4px;
-  }
+  /* Selecting an item in her menus darkens the row and turns the text pale,
+     not the other way around - pressed here follows the same read. */
   body[data-skin="2b"] .touch-btn.pressed, body[data-skin="2b"] .touch-mini.pressed {
-    background: #eee7c9; color: #14130d; border-color: #14130d;
+    background: #5a5844; color: #f2ede0; border-color: #201f16;
   }
   body[data-skin="2b"] .touch-btn .bullet, body[data-skin="2b"] .touch-mini .bullet {
     display: inline-block; width: 0.62em; height: 0.62em;
@@ -2611,21 +2613,24 @@ function drawSpeaker(c, x, y, on, color) {
 }
 
 // The touch-control mute button's icon. 2B's khaki buttons need a dark
-// glyph instead of the usual light one, so this redraws whenever the mute
-// state OR the skin changes, not just the former.
+// glyph instead of the usual light one (and a white one once pressed, to
+// match how selecting an item in her menus works), so this redraws
+// whenever the mute state, the skin, or the pressed state changes.
 const muteIconCanvas = document.getElementById("muteIcon");
 const muteIconCtx = muteIconCanvas.getContext("2d");
 muteIconCtx.imageSmoothingEnabled = false;
 let lastMuteIconKey = "";
 function updateTouchMuteIcon() {
   const on = !MUSIC.muted && !musicMissing();
-  const key = SK().id + "," + on;
+  const btnMute = document.getElementById("btnMute");
+  const pressed = !!(btnMute && btnMute.classList.contains("pressed"));
+  const key = SK().id + "," + on + "," + pressed;
   if (key === lastMuteIconKey) return;
   lastMuteIconKey = key;
   const w = muteIconCanvas.width, h = muteIconCanvas.height;
   muteIconCtx.setTransform(1, 0, 0, 1, 0, 0);
   muteIconCtx.clearRect(0, 0, w, h);
-  const color = SK().id === "2b" ? "#2c2a1d" : "#f4f8fb";
+  const color = SK().id === "2b" ? (pressed ? "#f2ede0" : "#2c2a1d") : "#f4f8fb";
   const s = w / 24;                                 // drawSpeaker was authored around a 24px box
   muteIconCtx.setTransform(s, 0, 0, s, w / 2 - s, h / 2);   // scale up, recenter
   drawSpeaker(muteIconCtx, 0, 0, on, color);
