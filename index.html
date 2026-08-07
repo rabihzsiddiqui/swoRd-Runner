@@ -33,38 +33,45 @@
   }
   canvas { display: block; width: 100%; height: 100%; }
 
-  /* Touch controls: two large thumb buttons, one per side. Attack sits on
-     the left, jump on the right, matching the tap-anywhere zones below.
-     Shown only on touch-primary devices so desktop/mouse play is untouched. */
+  /* Touch controls: two large thumb buttons, one per side, plus a smaller
+     pause/mute pair centered between them. Attack sits on the left, jump on
+     the right, matching the tap-anywhere zones below. Shown only on
+     touch-primary devices so desktop/mouse play is untouched. */
   .touch-controls { display: none; position: fixed; inset: 0; pointer-events: none; z-index: 10; }
   @media (hover: none) and (pointer: coarse) {
     .touch-controls { display: block; }
   }
-  .touch-btn {
-    position: absolute;
-    bottom: max(22px, env(safe-area-inset-bottom));
-    width: clamp(108px, 32vmin, 180px);
-    height: clamp(108px, 32vmin, 180px);
-    border-radius: 50%;
-    background: rgba(12,26,18,0.66);
-    border: 2px solid rgba(240,248,251,0.55);
+  /* A flat plateau with a raised bevel ring near the rim, rather than a
+     glossy sphere - reads as a pressed button cap, not a ball. bg0/bg1 are
+     the flat base tone; hi is the lit ring; edge is the rim shadow. */
+  .touch-btn, .touch-mini {
+    --bg0: rgba(12,26,18,0.72); --bg1: rgba(12,26,18,0.72);
+    --hi: rgba(70,100,80,0.75); --edge: rgba(6,12,9,0.8);
+    --border: rgba(240,248,251,0.55);
+    background: radial-gradient(circle at 50% 50%,
+      var(--bg0) 0%, var(--bg1) 58%, var(--hi) 76%, var(--edge) 94%);
+    border: 2px solid var(--border);
     color: #f4f8fb;
-    font: 700 18px ui-monospace, monospace;
-    letter-spacing: 0.03em;
-    display: flex;
-    align-items: center;
-    justify-content: center;
+    display: flex; align-items: center; justify-content: center;
     pointer-events: auto;
     touch-action: none;
-    -webkit-user-select: none;
-    user-select: none;
+    -webkit-user-select: none; user-select: none;
     -webkit-tap-highlight-color: transparent;
     transition: background-color 0.08s ease, border-color 0.08s ease, transform 0.08s ease;
     box-shadow: 0 6px 14px rgba(0,0,0,0.35);
   }
-  .touch-btn.attack { left: max(22px, env(safe-area-inset-left)); }
-  .touch-btn.jump { right: max(22px, env(safe-area-inset-right)); }
-  .touch-btn.pressed {
+  .touch-btn {
+    position: absolute;
+    bottom: max(38px, env(safe-area-inset-bottom));
+    width: clamp(108px, 32vmin, 180px);
+    height: clamp(108px, 32vmin, 180px);
+    border-radius: 50%;
+    font: 700 18px ui-monospace, monospace;
+    letter-spacing: 0.03em;
+  }
+  .touch-btn.attack { left: max(30px, env(safe-area-inset-left)); }
+  .touch-btn.jump { right: max(30px, env(safe-area-inset-right)); }
+  .touch-btn.pressed, .touch-mini.pressed {
     background: rgba(255,255,255,0.92);
     border-color: #ffffff;
     color: #12251a;
@@ -75,28 +82,89 @@
     image-rendering: pixelated; image-rendering: crisp-edges;
   }
 
+  /* Pause + mute, centered between the two main buttons. */
+  .touch-center {
+    position: absolute;
+    left: 50%; bottom: max(38px, env(safe-area-inset-bottom));
+    transform: translateX(-50%);
+    display: flex; flex-direction: column; align-items: center; gap: 10px;
+  }
+  .touch-mini {
+    width: clamp(46px, 13vmin, 64px);
+    height: clamp(46px, 13vmin, 64px);
+    border-radius: 50%;
+    font: 700 12px ui-monospace, monospace;
+  }
+  .touch-mini .icon {
+    width: 58%; height: 58%; pointer-events: none;
+    image-rendering: pixelated; image-rendering: crisp-edges;
+  }
+
   /* Link: a glossy green attack button carrying his current sword's badge
-     instead of a text label, and a glossy blue jump button, per reference. */
+     instead of a text label, and a glossy blue jump button, per reference.
+     Pause is a small red N64-style START button; mute keeps the default
+     look, just repositioned under it with everything else. */
   body[data-skin="link"] .touch-btn.attack {
-    background: radial-gradient(circle at 34% 28%, rgba(120,205,120,0.85), rgba(30,110,50,0.78) 72%);
-    border-color: rgba(220,255,220,0.55);
+    --bg0: rgba(40,130,60,0.85); --bg1: rgba(40,130,60,0.85);
+    --hi: rgba(150,225,150,0.9); --edge: rgba(18,70,32,0.9);
+    --border: rgba(220,255,220,0.55);
   }
   body[data-skin="link"] .touch-btn.jump {
-    background: radial-gradient(circle at 34% 28%, rgba(130,150,230,0.88), rgba(58,72,158,0.82) 72%);
-    border-color: rgba(225,232,255,0.6);
+    --bg0: rgba(70,90,180,0.88); --bg1: rgba(70,90,180,0.88);
+    --hi: rgba(160,175,240,0.92); --edge: rgba(35,44,105,0.92);
+    --border: rgba(225,232,255,0.6);
   }
   body[data-skin="link"] .touch-btn.attack .label { display: none; }
-  body[data-skin="link"] .touch-btn.attack .icon { display: block; }
+  body[data-skin="link"] .touch-btn.attack .icon { display: block; width: 74%; height: 74%; }
+  body[data-skin="link"] .touch-btn.jump .label { font-size: 26px; }
+  body[data-skin="link"] .touch-mini.pause {
+    --bg0: rgba(190,40,40,0.92); --bg1: rgba(190,40,40,0.92);
+    --hi: rgba(255,140,130,0.9); --edge: rgba(90,10,10,0.92);
+    --border: rgba(255,210,205,0.65);
+    font-size: 10px; letter-spacing: 0.05em;
+  }
+
+  /* 2B: flat rectangular tabs instead of glossy circles, a cream/khaki
+     computer-terminal palette instead of dark translucent, and a small
+     square bullet ahead of the label - all lifted from the game's own menu
+     screens rather than anything glossy or rounded. Flat panels, not the
+     radial bevel every other skin uses - a NieR UI reads as computerized
+     precisely because nothing on it looks physically lit. */
+  body[data-skin="2b"] .touch-btn, body[data-skin="2b"] .touch-mini {
+    background: linear-gradient(180deg, #e2dbba 0%, #cec5a0 100%);
+    border-color: #3c3928;
+    color: #2c2a1d;
+  }
+  body[data-skin="2b"] .touch-btn {
+    border-radius: 6px;
+    width: clamp(118px, 34vmin, 190px);
+    height: clamp(78px, 20vmin, 108px);
+    font: 700 16px ui-monospace, monospace;
+  }
+  body[data-skin="2b"] .touch-mini {
+    border-radius: 4px;
+  }
+  body[data-skin="2b"] .touch-btn.pressed, body[data-skin="2b"] .touch-mini.pressed {
+    background: #eee7c9; color: #14130d; border-color: #14130d;
+  }
+  body[data-skin="2b"] .touch-btn .bullet, body[data-skin="2b"] .touch-mini .bullet {
+    display: inline-block; width: 0.62em; height: 0.62em;
+    margin-right: 0.5em; background: currentColor; vertical-align: -0.08em;
+  }
 </style>
 </head>
 <body>
 <canvas id="game"></canvas>
 <div class="touch-controls">
   <button type="button" id="btnAttack" class="touch-btn attack">
-    <span class="label">ATTACK</span>
+    <span class="label"><span class="bullet"></span>ATTACK</span>
     <canvas class="icon" id="attackIcon" width="96" height="96"></canvas>
   </button>
-  <button type="button" id="btnJump" class="touch-btn jump"><span class="label">JUMP</span></button>
+  <div class="touch-center">
+    <button type="button" id="btnPause" class="touch-mini pause"><span class="label">II</span></button>
+    <button type="button" id="btnMute" class="touch-mini mute"><canvas class="icon" id="muteIcon" width="48" height="48"></canvas></button>
+  </div>
+  <button type="button" id="btnJump" class="touch-btn jump"><span class="label"><span class="bullet"></span>JUMP</span></button>
 </div>
 <script>
 "use strict";
@@ -381,6 +449,7 @@ function applySkin(i) {
   Object.assign(ART, SKINS[i].art);
   Object.assign(BG, DEFAULT_BG, SKINS[i].bg || {});
   if (document.body) document.body.dataset.skin = SKINS[i].id;  // lets touch-button CSS reskin per skin
+  updateTouchLabels(SKINS[i]);
   if (typeof S !== "undefined" && S) { initStrands(); initCompanion(); }
 }
 
@@ -626,6 +695,10 @@ function musicMissing() {
 let paused = false;
 let resumeIn = 0;          // seconds of "get ready" before the world moves again
 const UI = { buttons: [] };
+// Touch devices get the on-screen pause/mute buttons instead of the
+// top-right canvas icons (see .touch-center), so those don't draw twice.
+const IS_TOUCH = typeof window.matchMedia === "function" &&
+  window.matchMedia("(hover: none) and (pointer: coarse)").matches;
 
 function toVirtual(clientX, clientY) {
   const dpr = Math.min(window.devicePixelRatio || 1, 3);
@@ -758,6 +831,39 @@ function bindTouchButton(el, fn) {
 }
 bindTouchButton(document.getElementById("btnJump"), pressJump);
 bindTouchButton(document.getElementById("btnAttack"), pressAttack);
+
+// Pause and mute must keep working while paused (pause has to double as
+// resume, and mute is always available), so they skip bindTouchButton's
+// paused-swallows-input guard and call straight through.
+function bindTouchAction(el, fn) {
+  const press = e => { e.preventDefault(); el.classList.add("pressed"); fn(); };
+  const release = e => { e.preventDefault(); el.classList.remove("pressed"); };
+  el.addEventListener("pointerdown", press);
+  el.addEventListener("pointerup", release);
+  el.addEventListener("pointercancel", release);
+  el.addEventListener("pointerleave", release);
+}
+bindTouchAction(document.getElementById("btnPause"), togglePause);
+bindTouchAction(document.getElementById("btnMute"), () => { musicArm(); musicToggleMute(); });
+
+// Per-skin button text: Link's attack button hides its label for the sword
+// icon (see CSS), but still needs sane text for the others. 2B's menu-style
+// buttons use title case to match her reference UI.
+const TOUCH_LABELS = {
+  runner: { attack: "ATTACK", jump: "JUMP", pause: "II" },
+  link:   { attack: "ATTACK", jump: "Jump", pause: "START" },
+  "2b":   { attack: "Slash", jump: "Jump", pause: "II" }
+};
+function updateTouchLabels(skin) {
+  if (!document.body) return;                  // headless verify harness has no DOM
+  const t = TOUCH_LABELS[skin.id] || TOUCH_LABELS.runner;
+  const attackLabel = document.querySelector("#btnAttack .label");
+  const jumpLabel = document.querySelector("#btnJump .label");
+  const pauseLabel = document.querySelector("#btnPause .label");
+  if (attackLabel) attackLabel.innerHTML = '<span class="bullet"></span>' + t.attack;
+  if (jumpLabel) jumpLabel.innerHTML = '<span class="bullet"></span>' + t.jump;
+  if (pauseLabel) pauseLabel.textContent = t.pause;
+}
 
 /* ============================================================
    HELPERS
@@ -1134,6 +1240,7 @@ const ART = {
 Object.assign(ART, SKINS[skinIdx].art);   // apply the saved skin before first paint
 Object.assign(BG, DEFAULT_BG, SKINS[skinIdx].bg || {});
 if (document.body) document.body.dataset.skin = SKINS[skinIdx].id;
+updateTouchLabels(SKINS[skinIdx]);
 
 const D = Math.PI / 180;
 const POSE_KEYS = ["bob","lean","hipN","kneeN","hipF","kneeF","armN","elbN","armF","elbF"];
@@ -2481,23 +2588,48 @@ function updateTouchAttackIcon() {
   ictx.stroke();
 }
 
-function drawSpeaker(x, y, on) {
-  ctx.fillStyle = C.text;
-  ctx.beginPath();                                   // cone
-  ctx.moveTo(x - 6, y - 2.5); ctx.lineTo(x - 3, y - 2.5); ctx.lineTo(x, y - 6);
-  ctx.lineTo(x, y + 6); ctx.lineTo(x - 3, y + 2.5); ctx.lineTo(x - 6, y + 2.5);
-  ctx.closePath(); ctx.fill();
-  ctx.strokeStyle = C.text; ctx.lineWidth = 1.4; ctx.lineCap = "round";
+// context and colour are parameters so the touch-control mute icon (drawn
+// on its own small canvas, in a colour that has to match whichever skin's
+// button it sits on) can reuse the exact same shape as the desktop HUD's.
+function drawSpeaker(c, x, y, on, color) {
+  c.fillStyle = color;
+  c.beginPath();                                   // cone
+  c.moveTo(x - 6, y - 2.5); c.lineTo(x - 3, y - 2.5); c.lineTo(x, y - 6);
+  c.lineTo(x, y + 6); c.lineTo(x - 3, y + 2.5); c.lineTo(x - 6, y + 2.5);
+  c.closePath(); c.fill();
+  c.strokeStyle = color; c.lineWidth = 1.4; c.lineCap = "round";
   if (on) {
     for (const r of [3.5, 6]) {
-      ctx.beginPath(); ctx.arc(x + 1, y, r, -0.85, 0.85); ctx.stroke();
+      c.beginPath(); c.arc(x + 1, y, r, -0.85, 0.85); c.stroke();
     }
   } else {
-    ctx.beginPath();
-    ctx.moveTo(x + 3, y - 4); ctx.lineTo(x + 9, y + 4);
-    ctx.moveTo(x + 9, y - 4); ctx.lineTo(x + 3, y + 4);
-    ctx.stroke();
+    c.beginPath();
+    c.moveTo(x + 3, y - 4); c.lineTo(x + 9, y + 4);
+    c.moveTo(x + 9, y - 4); c.lineTo(x + 3, y + 4);
+    c.stroke();
   }
+}
+
+// The touch-control mute button's icon. 2B's khaki buttons need a dark
+// glyph instead of the usual light one, so this redraws whenever the mute
+// state OR the skin changes, not just the former.
+const muteIconCanvas = document.getElementById("muteIcon");
+const muteIconCtx = muteIconCanvas.getContext("2d");
+muteIconCtx.imageSmoothingEnabled = false;
+let lastMuteIconKey = "";
+function updateTouchMuteIcon() {
+  const on = !MUSIC.muted && !musicMissing();
+  const key = SK().id + "," + on;
+  if (key === lastMuteIconKey) return;
+  lastMuteIconKey = key;
+  const w = muteIconCanvas.width, h = muteIconCanvas.height;
+  muteIconCtx.setTransform(1, 0, 0, 1, 0, 0);
+  muteIconCtx.clearRect(0, 0, w, h);
+  const color = SK().id === "2b" ? "#2c2a1d" : "#f4f8fb";
+  const s = w / 24;                                 // drawSpeaker was authored around a 24px box
+  muteIconCtx.setTransform(s, 0, 0, s, w / 2 - s, h / 2);   // scale up, recenter
+  drawSpeaker(muteIconCtx, 0, 0, on, color);
+  muteIconCtx.setTransform(1, 0, 0, 1, 0, 0);
 }
 
 // How dark the ready/paused/dead backdrop is this frame, 0..1. Set here and
@@ -2572,18 +2704,21 @@ function drawHud() {
     ctx.textAlign = "left";
   }
 
-  // speaker toggle, always available; pause button only while running
-  button(W - 80, 16, 28, 24, "", () => { musicArm(); musicToggleMute(); }, { size: 12 });
-  drawSpeaker(W - 80 + 14, 28, !MUSIC.muted && !musicMissing());
-  if (musicMissing()) {
-    ctx.textAlign = "right";
-    ctx.fillStyle = C.dim;
-    ctx.font = "600 8px ui-monospace, monospace";
-    ctx.fillText("no music file", W - 88, 31);
-    ctx.textAlign = "left";
-  }
-  if (S.phase === "play" && !paused) {
-    button(W - 44, 16, 28, 24, "II", togglePause, { size: 13 });
+  // speaker + pause: the canvas top-right icons on desktop, or the
+  // dedicated .touch-center buttons on touch devices - never both.
+  if (!IS_TOUCH) {
+    button(W - 80, 16, 28, 24, "", () => { musicArm(); musicToggleMute(); }, { size: 12 });
+    drawSpeaker(ctx, W - 80 + 14, 28, !MUSIC.muted && !musicMissing(), C.text);
+    if (musicMissing()) {
+      ctx.textAlign = "right";
+      ctx.fillStyle = C.dim;
+      ctx.font = "600 8px ui-monospace, monospace";
+      ctx.fillText("no music file", W - 88, 31);
+      ctx.textAlign = "left";
+    }
+    if (S.phase === "play" && !paused) {
+      button(W - 44, 16, 28, 24, "II", togglePause, { size: 13 });
+    }
   }
 
   if (paused) {
@@ -2667,6 +2802,7 @@ function frame(now) {
   musicUpdate(dt);
   render();
   updateTouchAttackIcon();
+  updateTouchMuteIcon();
   requestAnimationFrame(frame);
 }
 requestAnimationFrame(frame);
