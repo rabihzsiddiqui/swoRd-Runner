@@ -5,7 +5,7 @@
 // Everything else (icons, manifest, music) is cache-first since those are
 // content-addressed by path, not edited in place.
 
-const CACHE_VERSION = "v1";
+const CACHE_VERSION = "v2";
 const CACHE_NAME = `sword-runner-${CACHE_VERSION}`;
 
 const APP_SHELL = [
