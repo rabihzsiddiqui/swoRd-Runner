@@ -622,23 +622,6 @@ const MUSIC = {
   muted: localStorage.getItem("swordRunnerMuted") === "1"
 };
 
-/* ============================================================
-   RUMBLE
-   navigator.vibrate has no iOS Safari support at all, so this is best-
-   effort: it silently does nothing where the API doesn't exist, the same
-   way a missing sprite silently falls back to a placeholder box elsewhere
-   in this file. Short buzzes for a tap, a longer one for a kill.
-   ============================================================ */
-let rumbleEnabled = localStorage.getItem("swordRunnerRumble") !== "0";
-function rumble(ms) {
-  if (rumbleEnabled && typeof navigator !== "undefined" && navigator.vibrate) navigator.vibrate(ms);
-}
-function toggleRumble() {
-  rumbleEnabled = !rumbleEnabled;
-  localStorage.setItem("swordRunnerRumble", rumbleEnabled ? "1" : "0");
-  if (rumbleEnabled) rumble(20);            // confirms it actually did something
-}
-
 function musicPlayer(skin) {
   let p = MUSIC.players[skin.id];
   if (!p) {
@@ -863,7 +846,6 @@ function bindTouchButton(el, fn) {
   const press = e => {
     e.preventDefault();
     el.classList.add("pressed");
-    rumble(15);
     if (paused || resumeIn > 0) return;
     fn();
   };
@@ -880,7 +862,7 @@ bindTouchButton(document.getElementById("btnAttack"), pressAttack);
 // resume, and mute is always available), so they skip bindTouchButton's
 // paused-swallows-input guard and call straight through.
 function bindTouchAction(el, fn) {
-  const press = e => { e.preventDefault(); el.classList.add("pressed"); rumble(15); fn(); };
+  const press = e => { e.preventDefault(); el.classList.add("pressed"); fn(); };
   const release = e => { e.preventDefault(); el.classList.remove("pressed"); };
   el.addEventListener("pointerdown", press);
   el.addEventListener("pointerup", release);
@@ -1032,7 +1014,6 @@ function update(dt) {
         S.mult = Math.min(CONFIG.multMax, S.mult + 1);
         S.score += CONFIG.killScore * S.mult * CONFIG.beam.scoreShare;
         burst(o.x + o.w / 2, o.y + o.h / 2, 10, sword().blade);
-        rumble(30);
       }
     }
     if (b.dead) S.beams.splice(i, 1);
@@ -1097,7 +1078,6 @@ function update(dt) {
           S.mult = Math.min(CONFIG.multMax, S.mult + 1);
           S.score += CONFIG.killScore * S.mult;
           burst(o.x + o.w / 2, o.y + o.h / 2, 14, sword().blade);
-          rumble(30);
         }
         S.freeze = Math.max(S.freeze, CONFIG.hitPause);
         S.shake = Math.max(S.shake, 7);
@@ -2790,8 +2770,6 @@ function drawHud() {
     ctx.fillText("CHARACTER", W / 2, 156);
     ctx.textAlign = "left";
     skinPicker(168);
-    button(W / 2 - 70, 224, 140, 30, rumbleEnabled ? "RUMBLE: ON" : "RUMBLE: OFF",
-      toggleRumble, { on: rumbleEnabled, size: 11 });
   }
 
   if (resumeIn > 0 && S.phase === "play") {
