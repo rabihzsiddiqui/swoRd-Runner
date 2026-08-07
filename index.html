@@ -10,7 +10,7 @@
   ------------------------
   Single file, no build step. Open in a browser and play.
   Keyboard: Space / Up = jump, X / Right = attack, R = restart
-  Touch:    left half of screen = jump, right half = attack
+  Touch:    left half of screen = attack, right half = jump
 
   Everything tunable lives in CONFIG at the top of the script.
   Art slots live in SPRITES. Drop in your iPad art with:
@@ -33,9 +33,9 @@
   }
   canvas { display: block; width: 100%; height: 100%; }
 
-  /* Touch controls: two large thumb buttons, one per side, matching the
-     existing left=jump / right=attack split. Shown only on touch-primary
-     devices so desktop/mouse play is untouched. */
+  /* Touch controls: two large thumb buttons, one per side. Attack sits on
+     the left, jump on the right, matching the tap-anywhere zones below.
+     Shown only on touch-primary devices so desktop/mouse play is untouched. */
   .touch-controls { display: none; position: fixed; inset: 0; pointer-events: none; z-index: 10; }
   @media (hover: none) and (pointer: coarse) {
     .touch-controls { display: block; }
@@ -60,22 +60,43 @@
     user-select: none;
     -webkit-tap-highlight-color: transparent;
     transition: background-color 0.08s ease, border-color 0.08s ease, transform 0.08s ease;
+    box-shadow: 0 6px 14px rgba(0,0,0,0.35);
   }
-  .touch-btn.jump { left: max(22px, env(safe-area-inset-left)); }
-  .touch-btn.attack { right: max(22px, env(safe-area-inset-right)); }
+  .touch-btn.attack { left: max(22px, env(safe-area-inset-left)); }
+  .touch-btn.jump { right: max(22px, env(safe-area-inset-right)); }
   .touch-btn.pressed {
     background: rgba(255,255,255,0.92);
     border-color: #ffffff;
     color: #12251a;
     transform: scale(0.90);
   }
+  .touch-btn .icon {
+    display: none; width: 60%; height: 60%; pointer-events: none;
+    image-rendering: pixelated; image-rendering: crisp-edges;
+  }
+
+  /* Link: a glossy green attack button carrying his current sword's badge
+     instead of a text label, and a glossy blue jump button, per reference. */
+  body[data-skin="link"] .touch-btn.attack {
+    background: radial-gradient(circle at 34% 28%, rgba(120,205,120,0.85), rgba(30,110,50,0.78) 72%);
+    border-color: rgba(220,255,220,0.55);
+  }
+  body[data-skin="link"] .touch-btn.jump {
+    background: radial-gradient(circle at 34% 28%, rgba(130,150,230,0.88), rgba(58,72,158,0.82) 72%);
+    border-color: rgba(225,232,255,0.6);
+  }
+  body[data-skin="link"] .touch-btn.attack .label { display: none; }
+  body[data-skin="link"] .touch-btn.attack .icon { display: block; }
 </style>
 </head>
 <body>
 <canvas id="game"></canvas>
 <div class="touch-controls">
-  <button type="button" id="btnJump" class="touch-btn jump">JUMP</button>
-  <button type="button" id="btnAttack" class="touch-btn attack">ATTACK</button>
+  <button type="button" id="btnAttack" class="touch-btn attack">
+    <span class="label">ATTACK</span>
+    <canvas class="icon" id="attackIcon" width="96" height="96"></canvas>
+  </button>
+  <button type="button" id="btnJump" class="touch-btn jump"><span class="label">JUMP</span></button>
 </div>
 <script>
 "use strict";
@@ -359,6 +380,7 @@ function applySkin(i) {
   localStorage.setItem("swordRunnerSkin", String(i));
   Object.assign(ART, SKINS[i].art);
   Object.assign(BG, DEFAULT_BG, SKINS[i].bg || {});
+  if (document.body) document.body.dataset.skin = SKINS[i].id;  // lets touch-button CSS reskin per skin
   if (typeof S !== "undefined" && S) { initStrands(); initCompanion(); }
 }
 
@@ -715,7 +737,7 @@ canvas.addEventListener("pointerdown", e => {
     if (v.x >= b.x && v.x <= b.x + b.w && v.y >= b.y && v.y <= b.y + b.h) { b.act(); return; }
   }
   if (paused || resumeIn > 0) return;       // menu and countdown swallow stray taps
-  if (e.clientX < window.innerWidth / 2) pressJump(); else pressAttack();
+  if (e.clientX < window.innerWidth / 2) pressAttack(); else pressJump();
 }, { passive: false });
 
 // Dedicated thumb buttons for touch devices (see .touch-btn CSS). They call
@@ -1111,6 +1133,7 @@ const ART = {
 };
 Object.assign(ART, SKINS[skinIdx].art);   // apply the saved skin before first paint
 Object.assign(BG, DEFAULT_BG, SKINS[skinIdx].bg || {});
+if (document.body) document.body.dataset.skin = SKINS[skinIdx].id;
 
 const D = Math.PI / 180;
 const POSE_KEYS = ["bob","lean","hipN","kneeN","hipF","kneeF","armN","elbN","armF","elbF"];
@@ -2392,6 +2415,72 @@ function drawSwordBadge(x, y) {
   }
 }
 
+// The attack button's icon, for skins that carry one (see .touch-btn CSS -
+// currently just Link). Drawn on its own small canvas with its own context
+// rather than reusing drawSwordBadge, which is wired to the shared game
+// buffer's ctx and HUD layout; this only needs the blade itself, scaled up
+// to fill a button instead of sitting beside a level number.
+const attackIconCanvas = document.getElementById("attackIcon");
+const attackIconCtx = attackIconCanvas.getContext("2d");
+attackIconCtx.imageSmoothingEnabled = false;
+let lastIconKey = "";
+function updateTouchAttackIcon() {
+  const skin = SK();
+  if (skin.id !== "link") return;                    // only Link carries one, for now
+  const key = skin.id + "," + S.swordLvl;
+  if (key === lastIconKey) return;                    // redraw only when it can have changed
+  lastIconKey = key;
+
+  const sw = sword();
+  const w = attackIconCanvas.width, h = attackIconCanvas.height;
+  const ictx = attackIconCtx;
+  ictx.clearRect(0, 0, w, h);
+  ictx.lineCap = "round"; ictx.lineJoin = "round";
+
+  const a = -0.7, fx = Math.cos(a), fy = Math.sin(a);
+  const nx = -Math.sin(a), ny = Math.cos(a);
+  const cx = w * 0.40, cy = h * 0.66, len = Math.min(w, h) * 0.62;
+
+  ictx.strokeStyle = sw.wrap; ictx.lineWidth = w * 0.09;    // grip
+  ictx.beginPath();
+  ictx.moveTo(cx - fx * len * 0.22, cy - fy * len * 0.22);
+  ictx.lineTo(cx, cy);
+  ictx.stroke();
+
+  ictx.strokeStyle = sw.hilt; ictx.lineWidth = w * 0.07;    // crossguard
+  ictx.beginPath();
+  ictx.moveTo(cx + fx * 2 - nx * len * 0.17, cy + fy * 2 - ny * len * 0.17);
+  ictx.lineTo(cx + fx * 2 + nx * len * 0.17, cy + fy * 2 + ny * len * 0.17);
+  ictx.stroke();
+  if (sw.gem) {
+    ictx.fillStyle = sw.gem;
+    ictx.beginPath(); ictx.arc(cx + fx * 2.4, cy + fy * 2.4, w * 0.035, 0, 6.2832); ictx.fill();
+  }
+
+  const base = { x: cx + fx * 4, y: cy + fy * 4 };
+  const shoulder = len * 0.72;
+  const tip = { x: cx + fx * len, y: cy + fy * len };
+  const hw = w * 0.052;
+  const blade = (bw, style) => {
+    ictx.beginPath();
+    ictx.moveTo(base.x - nx * bw, base.y - ny * bw);
+    ictx.lineTo(base.x + fx * shoulder - nx * bw, base.y + fy * shoulder - ny * bw);
+    ictx.lineTo(tip.x, tip.y);
+    ictx.lineTo(base.x + fx * shoulder + nx * bw, base.y + fy * shoulder + ny * bw);
+    ictx.lineTo(base.x + nx * bw, base.y + ny * bw);
+    ictx.closePath();
+    ictx.fillStyle = style; ictx.fill();
+  };
+  if (sw.glow) blade(hw * 2.3, "rgba(" + sw.trail + ",0.35)");
+  blade(hw * 1.4, INK);
+  blade(hw, sw.blade);
+  ictx.strokeStyle = sw.edge; ictx.lineWidth = Math.max(1, w * 0.018);
+  ictx.beginPath();
+  ictx.moveTo(base.x + fx * 2, base.y + fy * 2);
+  ictx.lineTo(base.x + fx * shoulder, base.y + fy * shoulder);
+  ictx.stroke();
+}
+
 function drawSpeaker(x, y, on) {
   ctx.fillStyle = C.text;
   ctx.beginPath();                                   // cone
@@ -2468,7 +2557,7 @@ function drawHud() {
     ctx.fillText("SWORD RUNNER", W / 2, 52);
     ctx.fillStyle = C.dim;
     ctx.font = "600 12px ui-monospace, monospace";
-    ctx.fillText("Left side or Space to jump.  Right side or X to slash.", W / 2, 76);
+    ctx.fillText("Left side or X to slash.  Right side or Space to jump.", W / 2, 76);
     ctx.fillText("Grey is armoured, so jump it. Red can be cut, and cutting builds your multiplier.", W / 2, 94);
     ctx.fillText("Gold lanterns hang at jump height. Cut them mid-air to awaken your blade.", W / 2, 112);
     ctx.fillStyle = C.text;
@@ -2577,6 +2666,7 @@ function frame(now) {
   while (acc >= STEP && guard++ < 240) { update(STEP); acc -= STEP; }
   musicUpdate(dt);
   render();
+  updateTouchAttackIcon();
   requestAnimationFrame(frame);
 }
 requestAnimationFrame(frame);
