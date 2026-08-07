@@ -103,16 +103,20 @@
   /* Link: a glossy green attack button carrying his current sword's badge
      instead of a text label, and a glossy blue jump button, per reference.
      Pause is a small red N64-style START button; mute keeps the default
-     look, just repositioned under it with everything else. */
+     look, just repositioned under it with everything else. Borders are a
+     darker shade of each button's own hue rather than the usual pale rim,
+     and pressing one sinks it into an even darker version of the same
+     gradient - like the cap is actually depressing - instead of the
+     generic flash-to-white every other skin's buttons use. */
   body[data-skin="link"] .touch-btn.attack {
     --bg0: rgba(40,130,60,0.85); --bg1: rgba(40,130,60,0.85);
     --hi: rgba(150,225,150,0.9); --edge: rgba(18,70,32,0.9);
-    --border: rgba(220,255,220,0.55);
+    --border: rgba(12,55,24,0.95);
   }
   body[data-skin="link"] .touch-btn.jump {
     --bg0: rgba(70,90,180,0.88); --bg1: rgba(70,90,180,0.88);
     --hi: rgba(160,175,240,0.92); --edge: rgba(35,44,105,0.92);
-    --border: rgba(225,232,255,0.6);
+    --border: rgba(18,24,64,0.95);
   }
   body[data-skin="link"] .touch-btn.attack .label { display: none; }
   body[data-skin="link"] .touch-btn.attack .icon { display: block; width: 74%; height: 74%; }
@@ -120,8 +124,28 @@
   body[data-skin="link"] .touch-mini.pause {
     --bg0: rgba(190,40,40,0.92); --bg1: rgba(190,40,40,0.92);
     --hi: rgba(255,140,130,0.9); --edge: rgba(90,10,10,0.92);
-    --border: rgba(255,210,205,0.65);
+    --border: rgba(60,6,6,0.95);
     font-size: 10px; letter-spacing: 0.05em;
+  }
+  body[data-skin="link"] .touch-btn.attack.pressed,
+  body[data-skin="link"] .touch-btn.jump.pressed,
+  body[data-skin="link"] .touch-mini.pause.pressed {
+    background: radial-gradient(circle at 50% 50%,
+      var(--pbg) 0%, var(--pbg) 58%, var(--phi) 76%, var(--pedge) 94%);
+    border-color: var(--border);
+    transform: scale(0.90);
+  }
+  body[data-skin="link"] .touch-btn.attack.pressed {
+    --pbg: rgba(20,75,34,0.95); --phi: rgba(60,140,75,0.9); --pedge: rgba(8,35,15,0.95);
+    color: #eafcec;
+  }
+  body[data-skin="link"] .touch-btn.jump.pressed {
+    --pbg: rgba(35,46,110,0.95); --phi: rgba(90,102,170,0.92); --pedge: rgba(16,20,52,0.95);
+    color: #eef0ff;
+  }
+  body[data-skin="link"] .touch-mini.pause.pressed {
+    --pbg: rgba(120,20,20,0.96); --phi: rgba(200,80,70,0.9); --pedge: rgba(50,4,4,0.96);
+    color: #ffe9e6;
   }
 
   /* 2B: flat rectangular tabs instead of glossy circles, a cream/khaki
@@ -598,6 +622,23 @@ const MUSIC = {
   muted: localStorage.getItem("swordRunnerMuted") === "1"
 };
 
+/* ============================================================
+   RUMBLE
+   navigator.vibrate has no iOS Safari support at all, so this is best-
+   effort: it silently does nothing where the API doesn't exist, the same
+   way a missing sprite silently falls back to a placeholder box elsewhere
+   in this file. Short buzzes for a tap, a longer one for a kill.
+   ============================================================ */
+let rumbleEnabled = localStorage.getItem("swordRunnerRumble") !== "0";
+function rumble(ms) {
+  if (rumbleEnabled && typeof navigator !== "undefined" && navigator.vibrate) navigator.vibrate(ms);
+}
+function toggleRumble() {
+  rumbleEnabled = !rumbleEnabled;
+  localStorage.setItem("swordRunnerRumble", rumbleEnabled ? "1" : "0");
+  if (rumbleEnabled) rumble(20);            // confirms it actually did something
+}
+
 function musicPlayer(skin) {
   let p = MUSIC.players[skin.id];
   if (!p) {
@@ -822,6 +863,7 @@ function bindTouchButton(el, fn) {
   const press = e => {
     e.preventDefault();
     el.classList.add("pressed");
+    rumble(15);
     if (paused || resumeIn > 0) return;
     fn();
   };
@@ -838,7 +880,7 @@ bindTouchButton(document.getElementById("btnAttack"), pressAttack);
 // resume, and mute is always available), so they skip bindTouchButton's
 // paused-swallows-input guard and call straight through.
 function bindTouchAction(el, fn) {
-  const press = e => { e.preventDefault(); el.classList.add("pressed"); fn(); };
+  const press = e => { e.preventDefault(); el.classList.add("pressed"); rumble(15); fn(); };
   const release = e => { e.preventDefault(); el.classList.remove("pressed"); };
   el.addEventListener("pointerdown", press);
   el.addEventListener("pointerup", release);
@@ -990,6 +1032,7 @@ function update(dt) {
         S.mult = Math.min(CONFIG.multMax, S.mult + 1);
         S.score += CONFIG.killScore * S.mult * CONFIG.beam.scoreShare;
         burst(o.x + o.w / 2, o.y + o.h / 2, 10, sword().blade);
+        rumble(30);
       }
     }
     if (b.dead) S.beams.splice(i, 1);
@@ -1054,6 +1097,7 @@ function update(dt) {
           S.mult = Math.min(CONFIG.multMax, S.mult + 1);
           S.score += CONFIG.killScore * S.mult;
           burst(o.x + o.w / 2, o.y + o.h / 2, 14, sword().blade);
+          rumble(30);
         }
         S.freeze = Math.max(S.freeze, CONFIG.hitPause);
         S.shake = Math.max(S.shake, 7);
@@ -2746,6 +2790,8 @@ function drawHud() {
     ctx.fillText("CHARACTER", W / 2, 156);
     ctx.textAlign = "left";
     skinPicker(168);
+    button(W / 2 - 70, 224, 140, 30, rumbleEnabled ? "RUMBLE: ON" : "RUMBLE: OFF",
+      toggleRumble, { on: rumbleEnabled, size: 11 });
   }
 
   if (resumeIn > 0 && S.phase === "play") {
