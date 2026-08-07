@@ -672,8 +672,19 @@ function musicStart(p) {
 }
 
 function musicArm() {
-  if (MUSIC.armed) return;
+  const wasArmed = MUSIC.armed;
   MUSIC.armed = true;
+  if (wasArmed) {
+    // A mobile browser can silently refuse the very first play() call even
+    // from within a real tap (the "still gesture-blocked" case musicStart
+    // already anticipates). Previously nothing ever retried it through this
+    // path, so the track stayed silent for the rest of the run unless the
+    // player happened to hit mute or the skin picker, which retry by calling
+    // musicSwitchTo directly. Every tap now gets another attempt until the
+    // current track is confirmed actually playing.
+    const p = MUSIC.players[MUSIC.currentId];
+    if (p && p.audio && !p.audio.paused) return;
+  }
   musicSwitchTo(SK());
 }
 
